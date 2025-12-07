@@ -2,6 +2,7 @@
 #include <WiFiClientSecure.h>
 #include <UniversalTelegramBot.h>
 #include <ArduinoJson.h>
+#include <Preferences.h>
 
 // ==========================================
 // --- USER CONFIGURATION (FILL THIS!) ---
@@ -12,130 +13,208 @@ const char* botToken   = "BOT_TOKEN";      // From @BotFather
 const char* chatID     = "CHAT_ID";        // From @IDBot (Your numeric ID)
 
 // ==========================================
-// --- PIN DEFINITIONS ---
+// --- PINS ---
 // ==========================================
-const int PIN_SIGNAL_INPUT  = 3;  // ADC Input for 800Hz signal
-const int PIN_BUTTON        = 4;  // Latching button (to GND)
-const int PIN_LED_BREATHE   = 5;  // External LED/MOSFET (Controlled by button)
-const int PIN_LED_INDICATOR = 8;  // Built-in LED/Relay (Active LOW)
+const int PIN_SIGNAL_INPUT  = 3;  
+const int PIN_BUTTON        = 4;  
+const int PIN_LED_BREATHE   = 5;  
+const int PIN_RELAY         = 10; 
 
 // ==========================================
-// --- OBJECTS & VARIABLES ---
+// --- OBJECTS ---
 // ==========================================
 WiFiClientSecure client;
 UniversalTelegramBot bot(botToken, client);
+Preferences preferences;
 
-// Settings for detection
+// Relay Logic
+const int RELAY_ACTIVE_LEVEL = HIGH; 
+const int RELAY_INACTIVE_LEVEL = LOW;
+const unsigned long RELAY_DURATION = 4000; 
+unsigned long relayOnTime = 0;
+bool isRelayActive = false;
+
+// Code Logic
+String secretCode = "";    
+String inputBuffer = "";   
+String tempCode = "";      
+
+// Flags for Multitasking (FIX FOR CRASHES)
+volatile bool pendingNotification = false; // Flag to send TG message
+
+// Bot State
+enum BotState {
+  STATE_NORMAL,
+  STATE_SETTING_CODE
+};
+BotState currentBotState = STATE_NORMAL;
+unsigned long lastInteractionTime = 0; 
+const unsigned long MENU_TIMEOUT = 60000; 
+
+// Signal Detection
 const int SIGNAL_THRESHOLD = 300; 
-const int SAMPLE_WINDOW = 50;     // 50ms window
-const int MIN_PULSES = 25;
-const int MAX_PULSES = 60;
+const int SAMPLE_WINDOW = 50;     
+const int MIN_PULSES = 25;        
+unsigned long samplingStartTime = 0; 
+int currentPulseCount = 0;           
+bool currentSignalState = false;     
 
-// Breathing LED variables
+// Logic Timing
+unsigned long signalDuration = 0;
+unsigned long lastSignalEndTime = 0;
+const int LONG_PRESS_THRESHOLD = 1000; 
+const int CODE_TIMEOUT = 2000;         
+
+// Breathing LED
 int fadeValue = 0;
 int fadeStep = 2; 
 unsigned long lastFadeUpdate = 0;
-const int FADE_INTERVAL = 10;
+int currentLedBrightness = -1;
 
-// Telegram variables
+// Telegram Timing
 unsigned long lastBotRun = 0;
-const int BOT_INTERVAL = 2000; // Check messages every 2 seconds
+const int BOT_INTERVAL = 300; 
+
+// Keyboards
+String kbdMain = "[[\"Open 🔓\", \"Status 📊\"], [\"⚙️ Setup Code\"]]";
+String kbdSetup = "[[\"⚫ Short\", \"➖ Long\"], [\"💾 Save\", \"❌ Cancel\"]]";
 
 // ==========================================
-// --- HELPER FUNCTIONS ---
+// --- FUNCTIONS ---
 // ==========================================
 
-// 1. Function to handle the breathing LED (Non-blocking)
+void setLedBrightness(int val) {
+  if (val != currentLedBrightness) {
+    analogWrite(PIN_LED_BREATHE, val);
+    currentLedBrightness = val;
+  }
+}
+
 void updateBreathingSystem() {
-  // Check button state: LOW = Closed (GND), HIGH = Open
-  bool isSwitchClosed = (digitalRead(PIN_BUTTON) == LOW);
-
-  if (isSwitchClosed) {
-    // Mode: Solid ON
-    analogWrite(PIN_LED_BREATHE, 255);
-    fadeValue = 255; // Reset fade so it starts smoothly when opened
+  if (digitalRead(PIN_BUTTON) == LOW) {
+    setLedBrightness(255);
+    fadeValue = 255; 
   } else {
-    // Mode: Breathing
     unsigned long now = millis();
-    if (now - lastFadeUpdate > FADE_INTERVAL) {
+    if (now - lastFadeUpdate > 10) { 
       lastFadeUpdate = now;
       fadeValue += fadeStep;
-
-      // Reverse direction at limits
-      if (fadeValue >= 255) {
-        fadeValue = 255;
-        fadeStep = -fadeStep;
-      } else if (fadeValue <= 0) {
-        fadeValue = 0;
-        fadeStep = -fadeStep;
-      }
-      analogWrite(PIN_LED_BREATHE, fadeValue);
+      if (fadeValue >= 255) { fadeValue = 255; fadeStep = -fadeStep; }
+      else if (fadeValue <= 0) { fadeValue = 0; fadeStep = -fadeStep; }
+      setLedBrightness(fadeValue);
     }
   }
 }
 
-// 2. Function to handle new Telegram messages (Updated with Buttons)
+void openDoor() {
+  digitalWrite(PIN_RELAY, RELAY_ACTIVE_LEVEL);
+  isRelayActive = true;
+  relayOnTime = millis();
+  Serial.println("DOOR OPENING");
+}
+
+void updateRelay() {
+  if (isRelayActive) {
+    if (millis() - relayOnTime > RELAY_DURATION) {
+      digitalWrite(PIN_RELAY, RELAY_INACTIVE_LEVEL);
+      isRelayActive = false;
+      Serial.println("DOOR CLOSED");
+    }
+  }
+}
+
+String visualizeCode(String rawCode) {
+  String visual = "";
+  if (rawCode.length() == 0) return "(empty)";
+  for (int i = 0; i < rawCode.length(); i++) {
+    if (rawCode[i] == 'S') visual += "⚫ "; 
+    if (rawCode[i] == 'L') visual += "➖ "; 
+  }
+  return visual;
+}
+
+// ==========================================
+// --- TELEGRAM LOGIC ---
+// ==========================================
 void handleNewMessages(int numNewMessages) {
   for (int i = 0; i < numNewMessages; i++) {
     String chat_id = String(bot.messages[i].chat_id);
     String text = bot.messages[i].text;
 
-    // Security check
     if (chat_id != chatID) {
-      bot.sendMessage(chat_id, "Access Denied ⛔", "");
+      bot.sendMessage(chat_id, "⛔ Access Denied", "");
+      continue;
+    }
+    lastInteractionTime = millis();
+
+    if (text == "❌ Cancel" || text == "/cancel") {
+      currentBotState = STATE_NORMAL;
+      bot.sendMessageWithReplyKeyboard(chat_id, "Cancelled. 🏠", "", kbdMain, true);
       continue;
     }
 
-    // --- KEYBOARD CONFIGURATION ---
-    // We create a JSON string that defines the button layout.
-    // Format: [["Row1_Btn1", "Row1_Btn2"], ["Row2_Btn1"]]
-    // resize_keyboard: true (makes buttons smaller/neater)
-    String keyboardJson = "[[\"Open Door 🔓\", \"Status 📊\"], [\"/start\"]]";
-
-    // --- COMMANDS ---
-
-    // 1. START (Show the menu)
-    if (text == "/start") {
-      String welcome = "👋 Control Panel Ready.\nSelect an option below:";
-      
-      // Send message WITH the keyboard
-      bot.sendMessageWithReplyKeyboard(chat_id, welcome, "", keyboardJson, true);
+    if (currentBotState == STATE_NORMAL) {
+      if (text == "/start") {
+        bot.sendMessageWithReplyKeyboard(chat_id, "🏠 **Main Menu**", "Markdown", kbdMain, true);
+      }
+      else if (text == "Open 🔓" || text == "/open") {
+        bot.sendMessage(chat_id, "Unlocking... ⏳", "");
+        openDoor();
+      }
+      else if (text == "Status 📊" || text == "/status") {
+        String msg = "✅ **System Online**\n";
+        msg += "🔑 Active Code: " + visualizeCode(secretCode);
+        bot.sendMessage(chat_id, msg, "Markdown");
+      }
+      else if (text == "⚙️ Setup Code") {
+        currentBotState = STATE_SETTING_CODE;
+        tempCode = ""; 
+        String msg = "✍️ **SETUP MODE**\nSequence limit: 10.";
+        bot.sendMessageWithReplyKeyboard(chat_id, msg, "Markdown", kbdSetup, true);
+      }
     }
-    
-    // 2. OPEN DOOR (Check for command OR button text)
-    else if (text == "/open" || text == "Open Door 🔓") {
-      bot.sendMessage(chat_id, "Opening door... 🔓", "");
-      
-      digitalWrite(PIN_LED_INDICATOR, LOW); // Active LOW -> ON
-      delay(2000); 
-      digitalWrite(PIN_LED_INDICATOR, HIGH); // Active LOW -> OFF
-      
-      bot.sendMessage(chat_id, "Door closed. 🔒", "");
-    }
-
-    // 3. STATUS (Check for command OR button text)
-    else if (text == "/status" || text == "Status 📊") {
-      String stats = "System Online ✅\n";
-      stats += "WiFi Signal: " + String(WiFi.RSSI()) + " dBm\n";
-      stats += "Waiting for signals...";
-      bot.sendMessage(chat_id, stats, "");
-    }
-    
-    // 4. UNKNOWN COMMAND
-    else {
-      bot.sendMessage(chat_id, "Unknown command. Press /start to reset buttons.", "");
+    else if (currentBotState == STATE_SETTING_CODE) {
+      if (text == "⚫ Short") {
+        if (tempCode.length() < 10) {
+          tempCode += "S";
+          bot.sendMessage(chat_id, "Sequence: " + visualizeCode(tempCode), "");
+        }
+      }
+      else if (text == "➖ Long") {
+        if (tempCode.length() < 10) {
+          tempCode += "L";
+          bot.sendMessage(chat_id, "Sequence: " + visualizeCode(tempCode), "");
+        }
+      }
+      else if (text == "💾 Save") {
+        if (tempCode.length() > 0) {
+          secretCode = tempCode;
+          preferences.begin("intercom", false);
+          preferences.putString("code", secretCode);
+          preferences.end();
+          bot.sendMessageWithReplyKeyboard(chat_id, "✅ **SAVED!**", "Markdown", kbdMain, true);
+          currentBotState = STATE_NORMAL;
+        } else {
+          bot.sendMessage(chat_id, "⚠️ Empty!", "");
+        }
+      }
     }
   }
 }
 
-// 3. The Telegram Task (Runs in background via FreeRTOS)
+// TASK: Handles WiFi & Telegram (Background)
 void telegramTask(void *pvParameters) {
   while (true) {
-    // Check WiFi connection
     if (WiFi.status() == WL_CONNECTED) {
-      unsigned long now = millis();
       
-      // Poll Telegram every few seconds
+      // 1. Check if we need to send a notification (SAFE METHOD)
+      if (pendingNotification) {
+        bot.sendMessage(chatID, "🔔 **Access Granted!** Door Opened.", "Markdown");
+        pendingNotification = false; // Reset flag
+      }
+
+      // 2. Check for incoming messages
+      unsigned long now = millis();
       if (now - lastBotRun > BOT_INTERVAL) {
         int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
         while (numNewMessages) {
@@ -144,11 +223,12 @@ void telegramTask(void *pvParameters) {
         }
         lastBotRun = now;
       }
+      
+      if (currentBotState == STATE_SETTING_CODE && (now - lastInteractionTime > MENU_TIMEOUT)) {
+        currentBotState = STATE_NORMAL;
+      }
     }
-    
-    // CRITICAL: Yield to other tasks (Signal detection). 
-    // Wait 10ms before checking loop again to save CPU.
-    vTaskDelay(10 / portTICK_PERIOD_MS); 
+    vTaskDelay(50 / portTICK_PERIOD_MS); 
   }
 }
 
@@ -157,87 +237,80 @@ void telegramTask(void *pvParameters) {
 // ==========================================
 void setup() {
   Serial.begin(115200);
-
-  // Pin Setup
+  
   pinMode(PIN_SIGNAL_INPUT, INPUT);
   pinMode(PIN_BUTTON, INPUT_PULLUP);
   pinMode(PIN_LED_BREATHE, OUTPUT);
-  pinMode(PIN_LED_INDICATOR, OUTPUT);
-  digitalWrite(PIN_LED_INDICATOR, HIGH); // Start OFF (assuming active LOW)
+  pinMode(PIN_RELAY, OUTPUT); 
+  digitalWrite(PIN_RELAY, RELAY_INACTIVE_LEVEL); 
 
-  // WiFi Setup
-  Serial.print("Connecting to WiFi: ");
-  Serial.println(ssid);
+  preferences.begin("intercom", true);
+  secretCode = preferences.getString("code", "SSS"); 
+  preferences.end();
+  Serial.println("Loaded Code: " + secretCode);
+
   WiFi.begin(ssid, password);
-  client.setInsecure(); // Allow connection without strict certificate check
-
-  // Wait for WiFi (with timeout so we don't hang forever)
-  int attempt = 0;
-  while (WiFi.status() != WL_CONNECTED && attempt < 20) {
-    delay(500);
-    Serial.print(".");
-    attempt++;
-  }
+  client.setInsecure();
+  while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
   
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nWiFi Connected!");
-    // Send a message on boot to confirm it works
-    bot.sendMessage(chatID, "System Started! 🚀", "");
-  } else {
-    Serial.println("\nWiFi Failed. Continuing in offline mode.");
-  }
-
-  // Create Telegram Task
-  // We pin it to the same core, but FreeRTOS handles time slicing.
-  xTaskCreate(
-    telegramTask,   // Function to run
-    "TelegramTask", // Name
-    8192,           // Stack size (Telegram needs a lot)
-    NULL,           // Parameters
-    1,              // Priority (Low priority)
-    NULL            // Task handle
-  );
+  bot.sendMessage(chatID, "🚀 **Online!**\nCode: " + visualizeCode(secretCode), "Markdown");
+  
+  xTaskCreate(telegramTask, "TelegramTask", 10240, NULL, 1, NULL);
 }
 
 // ==========================================
-// --- MAIN LOOP (High Priority) ---
+// --- LOOP (MAIN LOGIC) ---
 // ==========================================
 void loop() {
-  // This loop handles the 800Hz detection and breathing LED.
-  // It runs constantly. The Telegram task runs in the "gaps".
+  updateBreathingSystem();
+  updateRelay();
 
-  unsigned long startMillis = millis();
-  int pulseCount = 0;
-  bool signalWasHigh = false;
-
-  // Sampling Window (50ms)
-  while (millis() - startMillis < SAMPLE_WINDOW) {
-    // 1. Keep LED breathing smooth
-    updateBreathingSystem();
-
-    // 2. Read Signal
-    int analogValue = analogRead(PIN_SIGNAL_INPUT);
-
-    // Schmitt trigger logic
-    if (!signalWasHigh && analogValue > SIGNAL_THRESHOLD) {
-      signalWasHigh = true;
-      pulseCount++; 
-    } 
-    else if (signalWasHigh && analogValue < (SIGNAL_THRESHOLD - 50)) {
-      signalWasHigh = false;
-    }
+  int val = analogRead(PIN_SIGNAL_INPUT);
+  
+  if (!currentSignalState && val > SIGNAL_THRESHOLD) { 
+    currentSignalState = true; 
+    currentPulseCount++; 
+  } 
+  else if (currentSignalState && val < (SIGNAL_THRESHOLD - 50)) { 
+    currentSignalState = false; 
   }
 
-  // Analysis
-  if (pulseCount >= MIN_PULSES && pulseCount <= MAX_PULSES) {
-    // Signal Detected!
-    // We can notify Telegram here later, or trigger relay
-    Serial.printf("Signal DETECTED! Pulses: %d\n", pulseCount);
-    
-    // Activate Relay/LED (Active LOW)
-    digitalWrite(PIN_LED_INDICATOR, LOW); 
-  } else {
-    // Deactivate Relay/LED
-    digitalWrite(PIN_LED_INDICATOR, HIGH); 
+  unsigned long now = millis();
+  
+  if (now - samplingStartTime >= SAMPLE_WINDOW) {
+    bool isSignalPresent = (currentPulseCount >= MIN_PULSES);
+
+    if (isSignalPresent) {
+      signalDuration += SAMPLE_WINDOW;
+      lastSignalEndTime = now;
+    } else {
+      if (signalDuration > 0) {
+        char pressType = (signalDuration > LONG_PRESS_THRESHOLD) ? 'L' : 'S';
+        inputBuffer += pressType;
+        Serial.print("Input: "); Serial.println(visualizeCode(inputBuffer));
+        signalDuration = 0;
+      }
+
+      if (inputBuffer.length() > 0 && (now - lastSignalEndTime > CODE_TIMEOUT)) {
+        Serial.print("Checking: "); Serial.println(inputBuffer);
+        
+        if (inputBuffer == secretCode) {
+          Serial.println("ACCESS GRANTED");
+          
+          openDoor();
+          
+          // [FIX]: Don't send Telegram message here directly!
+          // Just set the flag, and let the background task handle it safely.
+          pendingNotification = true; 
+          
+        } else {
+          Serial.println("DENIED");
+        }
+        inputBuffer = "";
+      }
+    }
+
+    currentPulseCount = 0;
+    samplingStartTime = now;
   }
 }
