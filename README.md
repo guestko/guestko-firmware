@@ -27,6 +27,7 @@ This project upgrades a standard analog apartment intercom handset with smart fe
     * **MOSFET:** **IRLB8743** (N-Channel Logic Level).
     * **Gate Resistor:** **100 Ω** (Protects ESP32 GPIO).
     * **Pull-down Resistor:** **100 kΩ** (Keeps Gate stable/closed).
+    * **Wiring:** Gate to GPIO 5, Source to GND, Drain to Button LED cathode (-).
 
 ### 🔌 Wiring Diagram
 
@@ -45,12 +46,6 @@ This project upgrades a standard analog apartment intercom handset with smart fe
 
 #### 4. Status LED (Button Backlight)
 Controlled via MOSFET to handle the button's built-in LED (up to 12V).
-
-* **MOSFET Gate:** Connected to **GPIO 5** via **100 Ω** resistor.
-* **MOSFET Source:** Connected to **GND**.
-* **Gate Pull-down:** **100 kΩ** resistor connected between **Gate** and **Source** (GND).
-* **MOSFET Drain:** Connected to one side of the Button LED.
-* **Button LED:** Connect the other side to **VCC** (3.3V, 5V, or 12V depending on desired brightness).
 
 ---
 
@@ -88,10 +83,11 @@ Controlled via MOSFET to handle the button's built-in LED (up to 12V).
 
 ## 🧠 How it Works
 
-### Signal Detection logic
+### Signal Detection Logic
 The intercom uses a PWM-like signal. The RC circuit converts this to a DC voltage level.
-* **Idle:** High Voltage (~0.7V) -> ADC > 200
-* **Active (Button Pressed):** Low Voltage (~0.3V) -> ADC < 200 [Inverted Logic]
+* **Idle (Standby):** Line is at **0V**. ADC reads ~0.
+* **Active (Button Pressed):** Signal appears, voltage rises to **~0.3V - 0.4V**.
+* **Logic:** The firmware detects a press when `ADC > 200` (Threshold ~0.15V).
 
 ### Security Features
 1.  **Root Admin:** Your ID is hardcoded. You cannot be locked out.
