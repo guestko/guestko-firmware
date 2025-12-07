@@ -39,8 +39,8 @@ String secretCode = "";
 String inputBuffer = "";   
 String tempCode = "";      
 
-// Flags for Multitasking (FIX FOR CRASHES)
-volatile bool pendingNotification = false; // Flag to send TG message
+// Flags for Multitasking
+volatile bool pendingNotification = false; 
 
 // Bot State
 enum BotState {
@@ -90,19 +90,15 @@ void setLedBrightness(int val) {
   }
 }
 
-void updateBreathingSystem() {
-  if (digitalRead(PIN_BUTTON) == LOW) {
-    setLedBrightness(255);
-    fadeValue = 255; 
-  } else {
-    unsigned long now = millis();
-    if (now - lastFadeUpdate > 10) { 
-      lastFadeUpdate = now;
-      fadeValue += fadeStep;
-      if (fadeValue >= 255) { fadeValue = 255; fadeStep = -fadeStep; }
-      else if (fadeValue <= 0) { fadeValue = 0; fadeStep = -fadeStep; }
-      setLedBrightness(fadeValue);
-    }
+// Controls LED animation ONLY (Logic is handled in loop)
+void runBreathingAnimation() {
+  unsigned long now = millis();
+  if (now - lastFadeUpdate > 10) { 
+    lastFadeUpdate = now;
+    fadeValue += fadeStep;
+    if (fadeValue >= 255) { fadeValue = 255; fadeStep = -fadeStep; }
+    else if (fadeValue <= 0) { fadeValue = 0; fadeStep = -fadeStep; }
+    setLedBrightness(fadeValue);
   }
 }
 
@@ -164,6 +160,11 @@ void handleNewMessages(int numNewMessages) {
       else if (text == "Status 📊" || text == "/status") {
         String msg = "✅ **System Online**\n";
         msg += "🔑 Active Code: " + visualizeCode(secretCode);
+        
+        // Show if physical switch is ON or OFF
+        if (digitalRead(PIN_BUTTON) == LOW) msg += "\n🔘 Switch: ON (Listening)";
+        else msg += "\n🔘 Switch: OFF (Safe Mode)";
+        
         bot.sendMessage(chat_id, msg, "Markdown");
       }
       else if (text == "⚙️ Setup Code") {
@@ -202,18 +203,14 @@ void handleNewMessages(int numNewMessages) {
   }
 }
 
-// TASK: Handles WiFi & Telegram (Background)
 void telegramTask(void *pvParameters) {
   while (true) {
     if (WiFi.status() == WL_CONNECTED) {
-      
-      // 1. Check if we need to send a notification (SAFE METHOD)
       if (pendingNotification) {
         bot.sendMessage(chatID, "🔔 **Access Granted!** Door Opened.", "Markdown");
-        pendingNotification = false; // Reset flag
+        pendingNotification = false; 
       }
 
-      // 2. Check for incoming messages
       unsigned long now = millis();
       if (now - lastBotRun > BOT_INTERVAL) {
         int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
@@ -262,55 +259,81 @@ void setup() {
 // --- LOOP (MAIN LOGIC) ---
 // ==========================================
 void loop() {
-  updateBreathingSystem();
+  // Always update relay timer
   updateRelay();
 
-  int val = analogRead(PIN_SIGNAL_INPUT);
-  
-  if (!currentSignalState && val > SIGNAL_THRESHOLD) { 
-    currentSignalState = true; 
-    currentPulseCount++; 
-  } 
-  else if (currentSignalState && val < (SIGNAL_THRESHOLD - 50)) { 
-    currentSignalState = false; 
-  }
+  // CHECK PHYSICAL SWITCH (PIN 4)
+  // LOW = Pressed (Active)
+  // HIGH = Released (Safe Mode)
+  bool isSystemArmed = (digitalRead(PIN_BUTTON) == LOW);
 
-  unsigned long now = millis();
-  
-  if (now - samplingStartTime >= SAMPLE_WINDOW) {
-    bool isSignalPresent = (currentPulseCount >= MIN_PULSES);
+  if (isSystemArmed) {
+    // --- MODE 1: ARMED (LISTENING) ---
+    
+    // 1. LED Solid ON
+    setLedBrightness(255);
+    fadeValue = 255; // Reset fade for smooth transition later
 
-    if (isSignalPresent) {
-      signalDuration += SAMPLE_WINDOW;
-      lastSignalEndTime = now;
-    } else {
-      if (signalDuration > 0) {
-        char pressType = (signalDuration > LONG_PRESS_THRESHOLD) ? 'L' : 'S';
-        inputBuffer += pressType;
-        Serial.print("Input: "); Serial.println(visualizeCode(inputBuffer));
-        signalDuration = 0;
-      }
-
-      if (inputBuffer.length() > 0 && (now - lastSignalEndTime > CODE_TIMEOUT)) {
-        Serial.print("Checking: "); Serial.println(inputBuffer);
-        
-        if (inputBuffer == secretCode) {
-          Serial.println("ACCESS GRANTED");
-          
-          openDoor();
-          
-          // [FIX]: Don't send Telegram message here directly!
-          // Just set the flag, and let the background task handle it safely.
-          pendingNotification = true; 
-          
-        } else {
-          Serial.println("DENIED");
-        }
-        inputBuffer = "";
-      }
+    // 2. Perform Signal Detection
+    int val = analogRead(PIN_SIGNAL_INPUT);
+    
+    // Schmitt Trigger
+    if (!currentSignalState && val > SIGNAL_THRESHOLD) { 
+      currentSignalState = true; 
+      currentPulseCount++; 
+    } 
+    else if (currentSignalState && val < (SIGNAL_THRESHOLD - 50)) { 
+      currentSignalState = false; 
     }
 
+    // Window Check
+    unsigned long now = millis();
+    if (now - samplingStartTime >= SAMPLE_WINDOW) {
+      
+      bool isSignalPresent = (currentPulseCount >= MIN_PULSES);
+
+      if (isSignalPresent) {
+        signalDuration += SAMPLE_WINDOW;
+        lastSignalEndTime = now;
+      } else {
+        // Signal ended logic
+        if (signalDuration > 0) {
+          char pressType = (signalDuration > LONG_PRESS_THRESHOLD) ? 'L' : 'S';
+          inputBuffer += pressType;
+          Serial.print("Input: "); Serial.println(visualizeCode(inputBuffer));
+          signalDuration = 0;
+        }
+
+        // Check Code
+        if (inputBuffer.length() > 0 && (now - lastSignalEndTime > CODE_TIMEOUT)) {
+          if (inputBuffer == secretCode) {
+            Serial.println("ACCESS GRANTED");
+            openDoor();
+            pendingNotification = true; 
+          } else {
+            Serial.println("DENIED");
+          }
+          inputBuffer = "";
+        }
+      }
+      currentPulseCount = 0;
+      samplingStartTime = now;
+    }
+
+  } else {
+    // --- MODE 2: SAFE (BREATHING) ---
+    
+    // 1. Run Breathing Animation
+    runBreathingAnimation();
+
+    // 2. Clear buffers to prevent "pre-loading" a code
+    if (inputBuffer.length() > 0) {
+      inputBuffer = "";
+      Serial.println("System Disarmed: Buffer Cleared");
+    }
+    
+    // Reset sampling counters
     currentPulseCount = 0;
-    samplingStartTime = now;
+    signalDuration = 0;
   }
 }
