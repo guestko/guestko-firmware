@@ -15,10 +15,10 @@ const char* chatID     = "CHAT_ID";        // From @IDBot (Your numeric ID)
 // ==========================================
 // --- PINS ---
 // ==========================================
-const int PIN_SIGNAL_INPUT  = 3;  
-const int PIN_BUTTON        = 4;  
-const int PIN_LED_BREATHE   = 5;  
-const int PIN_RELAY         = 10; 
+const int PIN_SIGNAL_INPUT  = 3;  // ADC Input (Connected to RC Filter)
+const int PIN_BUTTON        = 4;  // Physical Switch (Arm/Disarm)
+const int PIN_LED_BREATHE   = 5;  // LED
+const int PIN_RELAY         = 10; // Relay (HIGH = OPEN)
 
 // ==========================================
 // --- OBJECTS ---
@@ -39,31 +39,27 @@ String secretCode = "";
 String inputBuffer = "";   
 String tempCode = "";      
 
-// Flags for Multitasking
-volatile bool pendingNotification = false; 
+// --- SETTINGS ---
+int settingGap = 200;       // Gap/Debounce (ms)
+int settingLongPress = 1000;// Long Press Threshold (ms)
 
-// Bot State
-enum BotState {
-  STATE_NORMAL,
-  STATE_SETTING_CODE
-};
+// --- SIGNAL THRESHOLD (DC LOGIC) ---
+// Active signal is ~0.38V (ADC ~470). Idle is 0V.
+// We set threshold at ~0.16V (ADC 200) to be safe.
+const int SIGNAL_THRESHOLD = 200; 
+
+// Debounce / Logic Variables
+unsigned long currentPressStartTime = 0;
+unsigned long lastSignalSeenTime = 0;
+bool isPressing = false; 
+const int CODE_TIMEOUT = 2000;    // Time to wait after sequence ends
+const int MAX_PRESS_LIMIT = 5000; // 5s limit for stuck button
+
+// Bot State Machine
+enum BotState { STATE_NORMAL, STATE_SETTING_CODE, STATE_SETTING_GAP, STATE_SETTING_LONG };
 BotState currentBotState = STATE_NORMAL;
 unsigned long lastInteractionTime = 0; 
-const unsigned long MENU_TIMEOUT = 60000; 
-
-// Signal Detection
-const int SIGNAL_THRESHOLD = 300; 
-const int SAMPLE_WINDOW = 50;     
-const int MIN_PULSES = 25;        
-unsigned long samplingStartTime = 0; 
-int currentPulseCount = 0;           
-bool currentSignalState = false;     
-
-// Logic Timing
-unsigned long signalDuration = 0;
-unsigned long lastSignalEndTime = 0;
-const int LONG_PRESS_THRESHOLD = 1000; 
-const int CODE_TIMEOUT = 2000;         
+const unsigned long MENU_TIMEOUT = 300000; 
 
 // Breathing LED
 int fadeValue = 0;
@@ -76,8 +72,10 @@ unsigned long lastBotRun = 0;
 const int BOT_INTERVAL = 300; 
 
 // Keyboards
-String kbdMain = "[[\"Open 🔓\", \"Status 📊\"], [\"⚙️ Setup Code\"]]";
+String kbdMain = "[[\"Open 🔓\", \"Status 📊\"], [\"⚙️ Setup Code\", \"🛠 Settings\"]]";
 String kbdSetup = "[[\"⚫ Short\", \"➖ Long\"], [\"💾 Save\", \"❌ Cancel\"]]";
+String kbdSettings = "[[\"⏳ Set Gap (Bounce)\"], [\"⏱ Set Long Time\"], [\"🔙 Back\"]]";
+String kbdCancelOnly = "[[\"❌ Cancel\"]]";
 
 // ==========================================
 // --- FUNCTIONS ---
@@ -90,7 +88,6 @@ void setLedBrightness(int val) {
   }
 }
 
-// Controls LED animation ONLY (Logic is handled in loop)
 void runBreathingAnimation() {
   unsigned long now = millis();
   if (now - lastFadeUpdate > 10) { 
@@ -134,13 +131,11 @@ String visualizeCode(String rawCode) {
 // ==========================================
 void handleNewMessages(int numNewMessages) {
   for (int i = 0; i < numNewMessages; i++) {
+    yield(); 
     String chat_id = String(bot.messages[i].chat_id);
     String text = bot.messages[i].text;
 
-    if (chat_id != chatID) {
-      bot.sendMessage(chat_id, "⛔ Access Denied", "");
-      continue;
-    }
+    if (chat_id != chatID) continue;
     lastInteractionTime = millis();
 
     if (text == "❌ Cancel" || text == "/cancel") {
@@ -148,57 +143,100 @@ void handleNewMessages(int numNewMessages) {
       bot.sendMessageWithReplyKeyboard(chat_id, "Cancelled. 🏠", "", kbdMain, true);
       continue;
     }
-
-    if (currentBotState == STATE_NORMAL) {
-      if (text == "/start") {
-        bot.sendMessageWithReplyKeyboard(chat_id, "🏠 **Main Menu**", "Markdown", kbdMain, true);
-      }
-      else if (text == "Open 🔓" || text == "/open") {
-        bot.sendMessage(chat_id, "Unlocking... ⏳", "");
-        openDoor();
-      }
-      else if (text == "Status 📊" || text == "/status") {
-        String msg = "✅ **System Online**\n";
-        msg += "🔑 Active Code: " + visualizeCode(secretCode);
-        
-        // Show if physical switch is ON or OFF
-        if (digitalRead(PIN_BUTTON) == LOW) msg += "\n🔘 Switch: ON (Listening)";
-        else msg += "\n🔘 Switch: OFF (Safe Mode)";
-        
-        bot.sendMessage(chat_id, msg, "Markdown");
-      }
-      else if (text == "⚙️ Setup Code") {
-        currentBotState = STATE_SETTING_CODE;
-        tempCode = ""; 
-        String msg = "✍️ **SETUP MODE**\nSequence limit: 10.";
-        bot.sendMessageWithReplyKeyboard(chat_id, msg, "Markdown", kbdSetup, true);
-      }
+    if (text == "/start" || text == "🔙 Back") {
+      currentBotState = STATE_NORMAL;
+      bot.sendMessageWithReplyKeyboard(chat_id, "🏠 **Main Menu**", "Markdown", kbdMain, true);
+      continue;
     }
-    else if (currentBotState == STATE_SETTING_CODE) {
-      if (text == "⚫ Short") {
-        if (tempCode.length() < 10) {
-          tempCode += "S";
-          bot.sendMessage(chat_id, "Sequence: " + visualizeCode(tempCode), "");
+
+    switch (currentBotState) {
+      case STATE_NORMAL:
+        if (text == "Open 🔓" || text == "/open") {
+          bot.sendMessage(chat_id, "Unlocking... ⏳", "");
+          openDoor();
         }
-      }
-      else if (text == "➖ Long") {
-        if (tempCode.length() < 10) {
-          tempCode += "L";
-          bot.sendMessage(chat_id, "Sequence: " + visualizeCode(tempCode), "");
+        else if (text == "Status 📊" || text == "/status") {
+          int val = analogRead(PIN_SIGNAL_INPUT);
+          String msg = "✅ **System Online**\n";
+          msg += "🔑 Code: " + visualizeCode(secretCode) + "\n";
+          msg += "------------------\n";
+          msg += "⚙️ Gap: " + String(settingGap) + " ms\n";
+          msg += "⚙️ Long: " + String(settingLongPress) + " ms\n";
+          msg += "📈 ADC: " + String(val) + " (Threshold > " + String(SIGNAL_THRESHOLD) + ")\n";
+          
+          if (digitalRead(PIN_BUTTON) == LOW) msg += "🔘 Switch: ON (Listening)";
+          else msg += "🔘 Switch: OFF (Safe Mode)";
+          
+          bot.sendMessage(chat_id, msg, "Markdown");
         }
-      }
-      else if (text == "💾 Save") {
-        if (tempCode.length() > 0) {
-          secretCode = tempCode;
-          preferences.begin("intercom", false);
-          preferences.putString("code", secretCode);
-          preferences.end();
-          bot.sendMessageWithReplyKeyboard(chat_id, "✅ **SAVED!**", "Markdown", kbdMain, true);
-          currentBotState = STATE_NORMAL;
-        } else {
-          bot.sendMessage(chat_id, "⚠️ Empty!", "");
+        else if (text == "⚙️ Setup Code") {
+          currentBotState = STATE_SETTING_CODE;
+          tempCode = ""; 
+          bot.sendMessageWithReplyKeyboard(chat_id, "✍️ **SETUP CODE**\nMax 10 clicks.", "Markdown", kbdSetup, true);
         }
-      }
+        else if (text == "🛠 Settings") {
+          bot.sendMessageWithReplyKeyboard(chat_id, "🔧 **SETTINGS**\nSelect parameter:", "Markdown", kbdSettings, true);
+        }
+        else if (text == "⏳ Set Gap (Bounce)") {
+          currentBotState = STATE_SETTING_GAP;
+          bot.sendMessageWithReplyKeyboard(chat_id, "Enter Gap (50 - 500 ms):", "", kbdCancelOnly, true);
+        }
+        else if (text == "⏱ Set Long Time") {
+          currentBotState = STATE_SETTING_LONG;
+          bot.sendMessageWithReplyKeyboard(chat_id, "Enter Long Press (500 - 3000 ms):", "", kbdCancelOnly, true);
+        }
+        break;
+
+      case STATE_SETTING_CODE:
+        if (text == "⚫ Short") {
+          if (tempCode.length() < 10) tempCode += "S";
+          bot.sendMessage(chat_id, "Seq: " + visualizeCode(tempCode), "");
+        }
+        else if (text == "➖ Long") {
+          if (tempCode.length() < 10) tempCode += "L";
+          bot.sendMessage(chat_id, "Seq: " + visualizeCode(tempCode), "");
+        }
+        else if (text == "💾 Save") {
+          if (tempCode.length() > 0) {
+            secretCode = tempCode;
+            preferences.begin("intercom", false);
+            preferences.putString("code", secretCode);
+            preferences.end();
+            bot.sendMessageWithReplyKeyboard(chat_id, "✅ **SAVED!**", "Markdown", kbdMain, true);
+            currentBotState = STATE_NORMAL;
+          } else {
+            bot.sendMessage(chat_id, "⚠️ Empty!", "");
+          }
+        }
+        break;
+
+      case STATE_SETTING_GAP:
+        {
+          int val = text.toInt(); 
+          if (val >= 50 && val <= 500) {
+            settingGap = val;
+            preferences.begin("intercom", false);
+            preferences.putInt("gap", settingGap);
+            preferences.end();
+            currentBotState = STATE_NORMAL;
+            bot.sendMessageWithReplyKeyboard(chat_id, "✅ Gap saved: " + String(val) + " ms", "", kbdMain, true);
+          } else bot.sendMessage(chat_id, "⚠️ Invalid range (50-500).", "");
+        }
+        break;
+
+      case STATE_SETTING_LONG:
+        {
+          int val = text.toInt();
+          if (val >= 500 && val <= 3000) {
+            settingLongPress = val;
+            preferences.begin("intercom", false);
+            preferences.putInt("long", settingLongPress);
+            preferences.end();
+            currentBotState = STATE_NORMAL;
+            bot.sendMessageWithReplyKeyboard(chat_id, "✅ Long Press saved: " + String(val) + " ms", "", kbdMain, true);
+          } else bot.sendMessage(chat_id, "⚠️ Invalid range (500-3000).", "");
+        }
+        break;
     }
   }
 }
@@ -206,11 +244,6 @@ void handleNewMessages(int numNewMessages) {
 void telegramTask(void *pvParameters) {
   while (true) {
     if (WiFi.status() == WL_CONNECTED) {
-      if (pendingNotification) {
-        bot.sendMessage(chatID, "🔔 **Access Granted!** Door Opened.", "Markdown");
-        pendingNotification = false; 
-      }
-
       unsigned long now = millis();
       if (now - lastBotRun > BOT_INTERVAL) {
         int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
@@ -220,9 +253,9 @@ void telegramTask(void *pvParameters) {
         }
         lastBotRun = now;
       }
-      
-      if (currentBotState == STATE_SETTING_CODE && (now - lastInteractionTime > MENU_TIMEOUT)) {
+      if (currentBotState != STATE_NORMAL && (millis() - lastInteractionTime > MENU_TIMEOUT)) {
         currentBotState = STATE_NORMAL;
+        bot.sendMessageWithReplyKeyboard(chatID, "⏳ **Menu timed out.**", "Markdown", kbdMain, true);
       }
     }
     vTaskDelay(50 / portTICK_PERIOD_MS); 
@@ -243,97 +276,93 @@ void setup() {
 
   preferences.begin("intercom", true);
   secretCode = preferences.getString("code", "SSS"); 
+  settingGap = preferences.getInt("gap", 200); 
+  settingLongPress = preferences.getInt("long", 1000);
   preferences.end();
-  Serial.println("Loaded Code: " + secretCode);
+  
+  Serial.println("System Started (DC Logic Mode)");
 
   WiFi.begin(ssid, password);
   client.setInsecure();
   while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
   
-  bot.sendMessage(chatID, "🚀 **Online!**\nCode: " + visualizeCode(secretCode), "Markdown");
-  
+  bot.sendMessage(chatID, "🚀 **Online!** (DC Mode)", "Markdown");
   xTaskCreate(telegramTask, "TelegramTask", 10240, NULL, 1, NULL);
 }
 
 // ==========================================
-// --- LOOP (MAIN LOGIC) ---
+// --- MAIN LOOP (DC LOGIC) ---
 // ==========================================
 void loop() {
-  // Always update relay timer
-  updateRelay();
+  updateRelay(); 
 
-  // CHECK PHYSICAL SWITCH (PIN 4)
-  // LOW = Pressed (Active)
-  // HIGH = Released (Safe Mode)
   bool isSystemArmed = (digitalRead(PIN_BUTTON) == LOW);
 
   if (isSystemArmed) {
-    // --- MODE 1: ARMED (LISTENING) ---
-    
-    // 1. LED Solid ON
+    // --- ARMED MODE ---
     setLedBrightness(255);
-    fadeValue = 255; // Reset fade for smooth transition later
+    fadeValue = 255; 
 
-    // 2. Perform Signal Detection
+    // 1. INSTANT READ (RC Filtered)
     int val = analogRead(PIN_SIGNAL_INPUT);
     
-    // Schmitt Trigger
-    if (!currentSignalState && val > SIGNAL_THRESHOLD) { 
-      currentSignalState = true; 
-      currentPulseCount++; 
-    } 
-    else if (currentSignalState && val < (SIGNAL_THRESHOLD - 50)) { 
-      currentSignalState = false; 
-    }
-
-    // Window Check
+    // Logic: Signal is ACTIVE if voltage > 0.16V (ADC > 200)
+    bool isSignalPresentNow = (val > SIGNAL_THRESHOLD);
     unsigned long now = millis();
-    if (now - samplingStartTime >= SAMPLE_WINDOW) {
+
+    // 2. STATE MACHINE
+    if (isSignalPresentNow) {
+      if (!isPressing) {
+        // New Press Started
+        isPressing = true;
+        currentPressStartTime = now;
+        Serial.println(">> SIGNAL START");
+      }
+      // Safety: Stuck Button Check
+      if (now - currentPressStartTime > MAX_PRESS_LIMIT) {
+        Serial.println("Error: Button Stuck (Reset)");
+        isPressing = false; 
+        inputBuffer = "";
+      }
       
-      bool isSignalPresent = (currentPulseCount >= MIN_PULSES);
-
-      if (isSignalPresent) {
-        signalDuration += SAMPLE_WINDOW;
-        lastSignalEndTime = now;
-      } else {
-        // Signal ended logic
-        if (signalDuration > 0) {
-          char pressType = (signalDuration > LONG_PRESS_THRESHOLD) ? 'L' : 'S';
-          inputBuffer += pressType;
-          Serial.print("Input: "); Serial.println(visualizeCode(inputBuffer));
-          signalDuration = 0;
+      lastSignalSeenTime = now; 
+    } 
+    else {
+      // No Signal
+      if (isPressing) {
+        // Gap Check
+        if (now - lastSignalSeenTime > settingGap) {
+          isPressing = false;
+          unsigned long duration = lastSignalSeenTime - currentPressStartTime;
+          
+          // Noise Filter (> 50ms)
+          if (duration > 50) { 
+             char pressType = (duration > settingLongPress) ? 'L' : 'S';
+             inputBuffer += pressType;
+             Serial.printf(">> PRESS END: %ld ms -> %c. Buffer: %s\n", duration, pressType, visualizeCode(inputBuffer).c_str());
+          }
         }
-
-        // Check Code
-        if (inputBuffer.length() > 0 && (now - lastSignalEndTime > CODE_TIMEOUT)) {
+      }
+      else {
+        // Code Timeout Check
+        if (inputBuffer.length() > 0 && (now - lastSignalSeenTime > CODE_TIMEOUT)) {
+          Serial.print("Checking Code: "); Serial.println(inputBuffer);
+          
           if (inputBuffer == secretCode) {
-            Serial.println("ACCESS GRANTED");
-            openDoor();
-            pendingNotification = true; 
+            Serial.println(">>> ACCESS GRANTED <<<");
+            openDoor(); 
           } else {
-            Serial.println("DENIED");
+            Serial.println("--- DENIED ---");
           }
           inputBuffer = "";
         }
       }
-      currentPulseCount = 0;
-      samplingStartTime = now;
     }
 
   } else {
-    // --- MODE 2: SAFE (BREATHING) ---
-    
-    // 1. Run Breathing Animation
+    // --- SAFE MODE ---
     runBreathingAnimation();
-
-    // 2. Clear buffers to prevent "pre-loading" a code
-    if (inputBuffer.length() > 0) {
-      inputBuffer = "";
-      Serial.println("System Disarmed: Buffer Cleared");
-    }
-    
-    // Reset sampling counters
-    currentPulseCount = 0;
-    signalDuration = 0;
+    if (inputBuffer.length() > 0) inputBuffer = "";
+    isPressing = false;
   }
 }
