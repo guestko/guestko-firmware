@@ -1,94 +1,112 @@
-# Button with LED and MOSFET Driver (ESP32)
+# Smart Intercom DIY Project with ESP32
 
-## Overview
-This setup uses a push button with an integrated LED.  
-The LED is driven through an N‑channel MOSFET **IRLB8743**.  
-The ESP32 controls the MOSFET gate to enable smooth "breathing" animation or full‑brightness mode.
+## 📖 Overview
+This project upgrades a standard analog apartment intercom handset with smart features using an **ESP32-C3 SuperMini** microcontroller.
 
-## Wiring
+**Key Features:**
+* **Secret Knock:** Open the door by tapping a rhythmic code on the intercom button (e.g., 3 short clicks).
+* **Telegram Bot:** Full control via smartphone (Open door, Manage users, Configure settings).
+* **WiFi Manager:** No hardcoded credentials. Connect to the device's hotspot to set up Wi-Fi.
+* **User Management:** Invite family members via temporary codes.
+* **Physical Safety Switch:** Toggle a physical switch to completely disable the "listening" mode for security.
 
-### Button
-- One side of the button is connected to **GND**.
-- The other side goes to **GPIO 4** on the ESP32.
-- The pin is configured as **INPUT_PULLUP**, so the button pulls the pin LOW when pressed.
+---
 
-### LED + MOSFET
-- ESP32 pin **GPIO 5** drives the **gate** of the MOSFET.
-- Between ESP32 pin and MOSFET gate there is a **100 Ω resistor** (gate current limiter).
-- Between **gate** and **source** of MOSFET there is a **100 kΩ resistor** (pull‑down to keep MOSFET off when pin is floating).
-- MOSFET used: **IRLB8743** (logic‑level, suitable for LED loads).
-- LED (or LED assembly) is connected between **VCC** and **MOSFET drain**.
-- MOSFET **source** goes to **GND**.
+## 🛠 Hardware Required
 
-### Behavior
-- When the button is pressed, the mode toggles between:
-  - **Breathing LED** (PWM fade in/out)
-  - **Solid LED** (full brightness)
+1.  **Microcontroller:** ESP32-C3 SuperMini (or any ESP32 board).
+2.  **Relay:** 3.3V High-Level Trigger Relay (to simulate button press).
+3.  **Passive Components (RC Filter):**
+    * Resistor: **4.7 kΩ**
+    * Capacitor: **4.7 µF** (Ceramic or Electrolytic)
+    * *This filter smooths the intercom's PWM signal into DC voltage for the ESP32.*
+4.  **Switch/Button:**
+    * **Type:** Latching Illuminated Push Button (Internal resistor, up to 12V, polarity insensitive).
+    * **Function:** Used for Arm/Disarm mode and visual status.
+5.  **LED Driver (MOSFET Control):**
+    * **MOSFET:** **IRLB8743** (N-Channel Logic Level).
+    * **Gate Resistor:** **100 Ω** (Protects ESP32 GPIO).
+    * **Pull-down Resistor:** **100 kΩ** (Keeps Gate stable/closed).
 
-## Sketch
+### 🔌 Wiring Diagram
 
-```cpp
-// ---- Pins ----
-const int PIN_LED = 5;        // MOSFET GATE
-const int PIN_BUTTON = 4;     // Button to GND, INPUT_PULLUP
+#### 1. Signal Input ("The Ear")
+* **Source:** Intercom Signal Line (+)
+* **Connection:** Signal Line -> Resistor (4.7k) -> **GPIO 3** (ESP32)
+* **Filtering:** **GPIO 3** -> Capacitor (4.7uF) -> **GND**
 
-// ---- Logical state ----
-bool isActive = false;        // false = breathing, true = LED fully on
+#### 2. Door Control
+* **Relay IN:** **GPIO 10** (Active HIGH)
 
-// ---- Breathing parameters ----
-int fadeValue = 0;
-int fadeStep = 1;             // was 5 — make it about 2x smoother
-unsigned long lastFadeUpdate = 0;
+#### 3. Safety Switch (Button Input)
+* **Pin:** **GPIO 4**
+* **Connection:** One side to GPIO 4, other side to **GND**.
+* *Note: Uses internal INPUT_PULLUP.*
 
-// ---- Debounce ----
-unsigned long lastButtonTime = 0;
-const int debounce = 180;
+#### 4. Status LED (Button Backlight)
+Controlled via MOSFET to handle the button's built-in LED (up to 12V).
 
-void setup() {
-  pinMode(PIN_BUTTON, INPUT_PULLUP);
-  pinMode(PIN_LED, OUTPUT);
+* **MOSFET Gate:** Connected to **GPIO 5** via **100 Ω** resistor.
+* **MOSFET Source:** Connected to **GND**.
+* **Gate Pull-down:** **100 kΩ** resistor connected between **Gate** and **Source** (GND).
+* **MOSFET Drain:** Connected to one side of the Button LED.
+* **Button LED:** Connect the other side to **VCC** (3.3V, 5V, or 12V depending on desired brightness).
 
-  analogWrite(PIN_LED, 0);
-}
+---
 
-void loop() {
-  // ---- Button ----
-  if (digitalRead(PIN_BUTTON) == LOW) {
-    unsigned long now = millis();
+## 🚀 Installation & Setup
 
-    if (now - lastButtonTime > debounce) {
-      lastButtonTime = now;
+### 1. Flash the Firmware
+1.  Open `intercom-esp32.ino` in Arduino IDE.
+2.  Install required libraries:
+    * `UniversalTelegramBot` by Brian Lough
+    * `ArduinoJson` by Benoit Blanchon
+    * `WiFiManager` by tzapu
+3.  **CRITICAL:** Edit the `HARDCODED CONFIG` section at the top of the sketch:
+    ```cpp
+    const String ROOT_ADMIN_ID = "YOUR_TELEGRAM_ID"; // Get from @userinfobot
+    const String BOT_TOKEN     = "YOUR_BOT_TOKEN";   // Get from @BotFather
+    ```
+4.  Select board **"ESP32C3 Dev Module"** and upload.
 
-      // Toggle state
-      isActive = !isActive;
+### 2. First Run (Wi-Fi Setup)
+1.  Power up the ESP32.
+2.  Connect your phone to the Wi-Fi network named **`Intercom-Setup`**.
+3.  A portal will open automatically (or go to `192.168.4.1`).
+4.  Select your home Wi-Fi and enter the password.
+5.  The device will reboot and connect to Telegram.
 
-      // If active now — LED to max
-      if (isActive) {
-        analogWrite(PIN_LED, 255);
-      }
-    }
-  }
+### 3. Telegram Bot Usage
+* `/start` - Open the main menu.
+* **Open 🔓** - Trigger the relay to open the door immediately.
+* **Status 📊** - Check connection, active code, and signal levels.
+* **⚙️ Setup Code** - Change the secret rhythmic pattern (Short/Long presses).
+* **🛠 Settings** - Tune signal sensitivity (Debounce Gap, Long Press threshold).
+* **👥 Users** - Generate invite codes for family members.
 
-  // ---- Modes ----
-  if (!isActive) {
-    // ----------- Smooth breathing -----------
-    unsigned long now = millis();
+---
 
-    if (now - lastFadeUpdate > 10) {  // breathing speed
-      lastFadeUpdate = now;
+## 🧠 How it Works
 
-      fadeValue += fadeStep;
+### Signal Detection logic
+The intercom uses a PWM-like signal. The RC circuit converts this to a DC voltage level.
+* **Idle:** High Voltage (~0.7V) -> ADC > 200
+* **Active (Button Pressed):** Low Voltage (~0.3V) -> ADC < 200 [Inverted Logic]
 
-      if (fadeValue >= 255 || fadeValue <= 0) {
-        fadeStep = -fadeStep;
-      }
+### Security Features
+1.  **Root Admin:** Your ID is hardcoded. You cannot be locked out.
+2.  **Physical Switch:**
+    * **OFF:** The ESP32 physically ignores the input line. "Safe Mode". The Button LED breathes.
+    * **ON:** The ESP32 listens for the secret code. The Button LED is solid ON.
+3.  **Watchdog:** The code uses non-blocking logic to prevent crashes during Wi-Fi activity.
 
-      analogWrite(PIN_LED, fadeValue);
-    }
+### Factory Reset
+If you change your Wi-Fi router:
+1.  Toggle the physical switch **5 times within 3 seconds**.
+2.  The LED will flash rapidly (Strobe effect), and settings will be wiped.
+3.  Connect to `Intercom-Setup` again.
 
-  } else {
-    // ----------- Solid LED -----------
-    analogWrite(PIN_LED, 255);
-  }
-}
-```
+---
+
+## 📝 License
+This is an open-source DIY project. Use at your own risk.
