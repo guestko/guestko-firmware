@@ -18,10 +18,9 @@ The device monitors the intercom line for a ringing signal. If a valid ring is d
 1.  **Microcontroller:** ESP32-C3 SuperMini.
 2.  **Relay Module:** 3.3V High-Level Trigger.
 3.  **Components for Peak Detector:**
-    * **Diode:** 1N4007 (Essential for polarity protection).
+    * **Diode:** 1N4007 (Essential for blocking negative voltage).
     * **Capacitor:** 4.7 µF (Electrolytic or Ceramic).
     * **Resistor:** 10 kΩ (Discharge resistor).
-    * **Resistor:** 4.7 kΩ (Current limiting/Input protection).
 
 ---
 
