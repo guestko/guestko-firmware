@@ -1,7 +1,7 @@
-# Offline Smart Intercom Controller (ESP32)
+# Offline Smart Intercom Controller (for Urmet CS1132 / 1131)
 
 ## 📖 Overview
-This project converts a standard analog apartment intercom (Urmet system) into an automated entry system using an **ESP32-C3 SuperMini**.
+This project upgrades a standard analog apartment intercom handset (**Urmet CS1132 Scaitel, 1131, 1140 series**) into an automated entry system using an **ESP32-C3 SuperMini**.
 
 **Core Function:**
 The device monitors the intercom line for a ringing signal. If a valid ring is detected (duration between 0.5s and 5s), it automatically triggers the relay to open the door.
@@ -10,6 +10,7 @@ The device monitors the intercom line for a ringing signal. If a valid ring is d
 * **100% Offline:** No WiFi, no Cloud, no delays. Instant boot.
 * **Auto-Open:** Automatically unlocks the door when rung.
 * **Noise Reduction:** Uses a Peak Detector circuit and short relay pulse (0.5s) to prevent audio interference.
+* **Compatibility:** Designed for analog "4+n" systems (Urmet CS1132 PCB, 5025/2D panels).
 
 ---
 
@@ -32,14 +33,14 @@ The device monitors the intercom line for a ringing signal. If a valid ring is d
 #### 1. Signal Detection (Peak Detector)
 This circuit converts the intercom's PWM ring signal (~800Hz, +/- 3.5V) into a stable DC voltage for the ESP32.
 
-* **Intercom CA (Call Line)** -> **Diode Anode (+)**
+* **Intercom CA (Call Line / Wywołanie)** -> **Diode Anode (+)**
 * **Diode Cathode (-)** -> **GPIO 3** (ESP32 Input)
 
 * **At the GPIO 3 Node (Parallel connection):**
     1.  **Capacitor (+)** to GPIO 3, **Capacitor (-)** to GND.
     2.  **Resistor (10k)** to GPIO 3, **Resistor** to GND.
 
-* **Intercom Pin 1 (Speaker Line)** -> **GND** (ESP32).
+* **Intercom Pin 1 (Speaker Line / Słuchawka)** -> **GND** (ESP32).
 
 #### 2. Door Control (Relay)
 * **ESP32 GPIO 10** -> **Relay IN**.
