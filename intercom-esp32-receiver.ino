@@ -1,8 +1,9 @@
 /**
- * Smart Intercom v40.1 (English / UX Edition)
- * * Fully button-based interface.
- * * Persistent settings storage (EEPROM/Preferences).
- * * Smart noise peak diagnostics.
+ * Smart Intercom v50.0 (Anti-Freeze Protection)
+ * * CRITICAL FIX: Added "Safety Timeout" to Telegram handler.
+ * * PROBLEM: If noise > threshold, device gets stuck in "Signal Active" loop 
+ * and stops checking Telegram, making it impossible to change settings.
+ * * SOLUTION: If signal lasts > 10s, we force Telegram checks to allow recovery.
  */
 
 #include <Arduino.h>
@@ -12,22 +13,22 @@
 #include <HTTPClient.h>
 #include <Update.h>
 #include <Preferences.h>
-#include <HTTPUpdate.h>
+#include <HTTPUpdate.h> 
 
 // ==========================================
-// --- USER SETTINGS (EDIT HERE) ---
+// --- USER SETTINGS ---
 // ==========================================
-const char* ssid          = "ssid";
-const char* password      = "password";
-const char* BOT_TOKEN     = "BOT_TOKEN";
-const char* ADMIN_ID      = "ADMIN_ID";
+const char* ssid          = "YOUR_WIFI_NAME";
+const char* password      = "YOUR_WIFI_PASSWORD";
+const char* BOT_TOKEN     = "YOUR_BOT_TOKEN";
+const char* ADMIN_ID      = "YOUR_CHAT_ID";
 
 // ==========================================
 // --- HARDWARE CONFIG ---
 // ==========================================
-#define LED_PIN 8       // Correct pin for your board
-#define LED_ON  LOW     // LOW turns LED ON
-#define LED_OFF HIGH    // HIGH turns LED OFF
+#define LED_PIN 8       
+#define LED_ON  LOW     
+#define LED_OFF HIGH    
 
 const int PIN_SIGNAL_INPUT  = 3;   
 const int PIN_RELAY         = 10;  
@@ -36,6 +37,7 @@ const int MIN_PRESS_TIME    = 500;
 const int MAX_PRESS_TIME    = 5000; 
 const int RELAY_PULSE_MS    = 500;  
 const int DEFAULT_THRESHOLD = 1000; 
+const int SAFETY_TIMEOUT    = 10000; // 10 Seconds max signal duration
 
 // ==========================================
 // --- OBJECTS ---
@@ -70,10 +72,10 @@ String KBD_SENS = "[[\"Set: 300\", \"Set: 500\", \"Set: 800\"], [\"Set: 1000\", 
 // ==========================================
 void handleLedStatus() {
   if (WiFi.status() == WL_CONNECTED) {
-    // === CONNECTED: SOLID ON ===
+    // CONNECTED: SOLID ON
     digitalWrite(LED_PIN, LED_ON);  
   } else {
-    // === DISCONNECTED: OFF ===
+    // DISCONNECTED: OFF
     digitalWrite(LED_PIN, LED_OFF);
   }
 }
@@ -94,7 +96,6 @@ String fixGoogleDriveLink(String url) {
 
 void performUpdate(String url) {
   String cleanUrl = fixGoogleDriveLink(url);
-  
   if (debugMode) bot.sendMessage(ADMIN_ID, "⏳ OTA...", "");
   
   WiFiClientSecure updateClient;
@@ -141,6 +142,7 @@ void handleNewMessages(int numNewMessages) {
     else if (text == "📊 Status" || text == "/status") {
       int adc = analogRead(PIN_SIGNAL_INPUT);
       String msg = "📊 **STATUS**\n";
+      msg += "Threshold: " + String(signalThreshold) + "\n";
       msg += "Build: " + String(__DATE__) + " " + String(__TIME__); 
       bot.sendMessage(chat_id, msg, "Markdown");
     }
@@ -186,15 +188,11 @@ void setup() {
   pinMode(PIN_RELAY, OUTPUT);
   pinMode(LED_PIN, OUTPUT);
   
-  // === CONFIRMATION BLINKS ===
-  // 5 rapid blinks at startup to show life
+  // Startup Flash (5 times)
   for(int i=0; i<5; i++) {
-    digitalWrite(LED_PIN, LED_ON);
-    delay(100);
-    digitalWrite(LED_PIN, LED_OFF);
-    delay(100);
+    digitalWrite(LED_PIN, LED_ON); delay(100);
+    digitalWrite(LED_PIN, LED_OFF); delay(100);
   }
-  // ===========================
   
   digitalWrite(PIN_RELAY, LOW);
   digitalWrite(LED_PIN, LED_OFF); 
@@ -237,6 +235,7 @@ void loop() {
     }
     if (adcVal > maxSignalLevel) maxSignalLevel = adcVal;
   } else {
+    // Signal Ended
     if (isReceivingSignal) {
       unsigned long duration = millis() - signalStartTime;
       isReceivingSignal = false;
@@ -258,8 +257,13 @@ void loop() {
     }
   }
 
-  // Telegram
-  if (!isReceivingSignal && WiFi.status() == WL_CONNECTED && millis() - lastBotCheck > 1000) {
+  // === TELEGRAM HANDLER (Anti-Freeze Protected) ===
+  // We check messages if:
+  // 1. Signal is NOT active OR
+  // 2. Signal IS active but lasted > 10 seconds (Safety Timeout)
+  bool isStuck = isReceivingSignal && (millis() - signalStartTime > SAFETY_TIMEOUT);
+  
+  if ((!isReceivingSignal || isStuck) && WiFi.status() == WL_CONNECTED && millis() - lastBotCheck > 1000) {
     int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
     while (numNewMessages) {
       handleNewMessages(numNewMessages);
