@@ -1,81 +1,73 @@
-# Offline Smart Intercom Controller (for Urmet CS1132 / 1131)
+# Smart Intercom ESP32 (Telegram & OTA Edition)
 
-## 📖 Overview
-This project upgrades a standard analog apartment intercom handset (**Urmet CS1132 Scaitel, 1131, 1140 series**) into an automated entry system using an **ESP32-C3 SuperMini**.
+A smart intercom system based on the **ESP32-C3 SuperMini**. It features Telegram notifications, remote door control, and wireless cloud updates (OTA) directly from Google Drive.
 
-**Core Function:**
-The device monitors the intercom line for a ringing signal. If a valid ring is detected (duration between 0.5s and 5s), it automatically triggers the relay to open the door.
-
-**Highlights:**
-* **100% Offline:** No WiFi, no Cloud, no delays. Instant boot.
-* **Auto-Open:** Automatically unlocks the door when rung.
-* **Noise Reduction:** Uses a Peak Detector circuit and short relay pulse (0.5s) to prevent audio interference.
-* **Compatibility:** Designed for analog "4+n" systems (Urmet CS1132 PCB, 5025/2D panels).
+## 🌟 Key Features
+* **🔔 Instant Notifications:** Receive a message in Telegram when the doorbell rings.
+* **🔓 Remote Control:** Open the door using the `/open` command or the chat button.
+* **☁️ Cloud Updates (OTA):** Update firmware wirelessly using direct Google Drive links (supports redirects).
+* **🧠 Smart Status:** Visual connection status via LED and line noise diagnostics.
+* **💾 Persistent Settings:** Sensitivity thresholds are saved in non-volatile memory.
 
 ---
 
-## 🛠 Hardware Required
+## 💡 Status Indicator (LED)
+Behavior of the built-in LED (GPIO 8, Active LOW):
 
-1.  **Microcontroller:** ESP32-C3 SuperMini.
-2.  **Relay Module:** 3.3V High-Level Trigger.
-3.  **Components for Peak Detector:**
-    * **Diode:** 1N4007 (Essential for blocking negative voltage).
-    * **Capacitor:** 4.7 µF (Electrolytic or Ceramic).
-    * **Resistor:** 10 kΩ (Discharge resistor).
-
----
-
-### 🔌 Wiring Diagram
-
-**⚠️ SAFETY WARNING:** The Signal Ground is connected to the Intercom Speaker Line (Pin 1). 
-**DO NOT connect the ESP32 to a computer via USB while it is connected to the intercom.** Power the ESP32 only via an isolated USB wall charger or power bank.
-
-#### 1. Signal Detection (Peak Detector)
-This circuit converts the intercom's PWM ring signal (~800Hz, +/- 3.5V) into a stable DC voltage for the ESP32.
-
-* **Intercom CA (Call Line / Wywołanie)** -> **Diode Anode (+)**
-* **Diode Cathode (-)** -> **GPIO 3** (ESP32 Input)
-
-* **At the GPIO 3 Node (Parallel connection):**
-    1.  **Capacitor (+)** to GPIO 3, **Capacitor (-)** to GND.
-    2.  **Resistor (10k)** to GPIO 3, **Resistor** to GND.
-
-* **Intercom Pin 1 (Speaker Line / Słuchawka)** -> **GND** (ESP32).
-
-#### 2. Door Control (Relay)
-* **ESP32 GPIO 10** -> **Relay IN**.
-* **ESP32 5V/3.3V** -> **Relay VCC**.
-* **ESP32 GND** -> **Relay GND**.
-* **Intercom Pin 9 & 10** -> Connected to Relay **COM** and **NO** (Normally Open) terminals.
+| System State | LED Behavior | Meaning |
+| :--- | :--- | :--- |
+| **Startup** | ⚡️ 5 Rapid Blinks | Power ON, Hardware check passed. |
+| **Connected** | 🔵 Solid ON | Wi-Fi connected, Bot active, System Ready. |
+| **Disconnected** | ⚫️ OFF | No Wi-Fi connection or Network error. |
 
 ---
 
-## ⚙️ Logic & Timing
+## 🛠 Admin Guide: How to Perform a Cloud Update (OTA)
 
-1.  **Signal Detection:**
-    * The code reads the analog voltage on **GPIO 3**.
-    * Threshold: **ADC > 1000** (approx 0.8V). 
-    * Due to the Peak Detector circuit, a valid ring produces ~2.7V DC.
+This system allows you to update the firmware remotely without a USB cable. The bot automatically handles Google Drive "Share" links.
 
-2.  **Validation:**
-    * Short glitches (< 500ms) are ignored.
-    * Stuck buttons (> 5000ms) are ignored.
-    * Only signals between **0.5s and 5.0s** trigger the door.
+### Step 1: Prepare the Firmware File
+**⚠️ CRITICAL:** Do not upload the source code (`.ino`). The microcontroller requires a compiled binary file (`.bin`).
 
-3.  **Action:**
-    * The relay fires for exactly **500 ms**.
-    * This short pulse is sufficient to unlatch the mechanical lock without causing buzzing on the handset audio line.
+1.  Open your sketch in **Arduino IDE**.
+2.  Go to the menu: **Sketch -> Export Compiled Binary**.
+3.  Open the sketch folder (**Sketch -> Show Sketch Folder**).
+4.  Locate the file ending in `.bin` (e.g., `intercom.ino.esp32c3.bin`).
+    * *Note: Ignore files containing `bootloader` or `partitions`.*
+
+### Step 2: Upload to Cloud
+1.  Upload the `.bin` file to **Google Drive**.
+2.  Right-click the file -> **Share**.
+3.  Under "General Access", select: **"Anyone with the link"**.
+4.  Click **Copy Link**.
+
+### Step 3: Trigger the Update
+1.  Open your Telegram chat with the Intercom Bot.
+2.  Send the update command with your link:
+    ```text
+    /update [https://drive.google.com/file/d/YOUR_FILE_ID/view?usp=sharing](https://drive.google.com/file/d/YOUR_FILE_ID/view?usp=sharing)
+    ```
+3.  **Wait for the process:**
+    * Bot replies: `⏳ OTA Starting...`
+    * If successful: `✅ OK! Rebooting...`
+    * After ~15 seconds, you will receive a `✅ SYSTEM READY` message with the new build timestamp.
 
 ---
 
-## 🚀 Installation
+## ⚙️ Bot Commands
+* `/start` — Main Menu.
+* `/open` — Open the door (triggers relay).
+* `/status` — Show signal noise level, current threshold, and Firmware Build Date.
+* `/update [url]` — Start the OTA update process.
+* **Settings Menu:** Adjust the signal sensitivity threshold.
 
-1.  Connect the ESP32 to your PC (Disconnect from intercom first!).
-2.  Flash `intercom-esp32.ino` using Arduino IDE (Board: ESP32C3 Dev Module).
-3.  Disconnect from PC.
-4.  Wire up to the intercom system.
-5.  Power up via external USB charger.
-6.  System is live immediately.
+---
 
-## 📝 License
-Open Source DIY Project. Use at your own risk.
+## 🔌 Hardware Pinout
+* **Board:** ESP32-C3 SuperMini (Black).
+* **Signal Input (Audio):** GPIO 3 (Analog).
+* **Relay (Door):** GPIO 10.
+* **Status LED:** GPIO 8.
+
+## ⚠️ Initial Setup
+For the very first installation (or if the device is "bricked" and cannot connect to Wi-Fi), you must flash the firmware via **USB Cable** using Arduino IDE. All subsequent updates can be done via Telegram.
