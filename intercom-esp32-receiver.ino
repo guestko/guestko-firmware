@@ -1,131 +1,286 @@
 /**
- * Smart Intercom Controller v34.0 (Offline / Standalone)
- * * Logic:
- * 1. Monitors analog input for intercom ring signal (Peak Detector).
- * 2. If signal duration is valid (0.5s - 5.0s), triggers relay.
- * 3. Relay pulse is short (0.5s) to avoid line noise.
- * * Hardware Scheme (Peak Detector):
- * - Intercom CA -> Diode Anode -> Diode Cathode -> GPIO 3
- * - GPIO 3 -> Capacitor (+) -> Capacitor (-) -> GND
- * - GPIO 3 -> Resistor (10k) -> GND (Parallel to Capacitor)
- * - Intercom Pin 1 (Speaker) -> GND (Virtual Ground)
+ * Smart Intercom v40.1 (English / UX Edition)
+ * * Fully button-based interface.
+ * * Persistent settings storage (EEPROM/Preferences).
+ * * Smart noise peak diagnostics.
  */
 
 #include <Arduino.h>
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <UniversalTelegramBot.h>
+#include <HTTPClient.h>
+#include <Update.h>
+#include <Preferences.h>
+#include <HTTPUpdate.h>
 
 // ==========================================
-// --- PINS CONFIGURATION ---
+// --- USER SETTINGS (EDIT HERE) ---
 // ==========================================
-const int PIN_SIGNAL_INPUT  = 3;   // Analog Input (from Peak Detector)
-const int PIN_RELAY         = 10;  // Door Open Relay (Active High)
+const char* ssid          = "ssid";
+const char* password      = "password";
+const char* BOT_TOKEN     = "BOT_TOKEN";
+const char* ADMIN_ID      = "ADMIN_ID";
 
 // ==========================================
-// --- SETTINGS ---
+// --- HARDWARE CONFIG ---
 // ==========================================
-// ADC Threshold (0-4095). 1000 is approx 0.8V.
-// Signal peak is ~2.8V, so 1000 is a safe margin.
-const int SIGNAL_THRESHOLD  = 1000; 
+#define LED_PIN 8       // Correct pin for your board
+#define LED_ON  LOW     // LOW turns LED ON
+#define LED_OFF HIGH    // HIGH turns LED OFF
 
-// Signal Duration Logic (Anti-bounce)
-const int MIN_PRESS_TIME    = 500;  // Min duration to trigger (0.5 sec)
-const int MAX_PRESS_TIME    = 5000; // Max duration to trigger (5.0 sec)
+const int PIN_SIGNAL_INPUT  = 3;   
+const int PIN_RELAY         = 10;  
 
-// Relay Logic
-const int RELAY_PULSE_MS    = 500;  // Relay click duration (0.5 sec)
+const int MIN_PRESS_TIME    = 500;  
+const int MAX_PRESS_TIME    = 5000; 
+const int RELAY_PULSE_MS    = 500;  
+const int DEFAULT_THRESHOLD = 1000; 
 
 // ==========================================
-// --- VARIABLES ---
+// --- OBJECTS ---
 // ==========================================
-// Relay Timer
+WiFiClientSecure client;
+UniversalTelegramBot bot(BOT_TOKEN, client);
+Preferences preferences;
+
+// Logic vars
+int signalThreshold = DEFAULT_THRESHOLD;
 unsigned long relayOnTime = 0;
 bool isRelayActive = false;
-
-// Signal State Machine
 bool isReceivingSignal = false;
 unsigned long signalStartTime = 0;
+int maxSignalLevel = 0;
+int backgroundNoisePeak = 0;
+
+// System State
+bool debugMode = false;
+bool shouldReboot = false;
+unsigned long lastDebugSend = 0;
+unsigned long lastBotCheck = 0;
+unsigned long lastWifiCheck = 0;
+
+// Keyboards
+String KBD_MAIN = "[[\"🔓 Open\", \"📊 Status\"], [\"🔧 Sensitivity\", \"🛠 Diagnostics\"]]";
+String KBD_DEBUG = "[[\"🟢 Stream ON\", \"🔴 Stream OFF\"], [\"⬅️ Back\"]]";
+String KBD_SENS = "[[\"Set: 300\", \"Set: 500\", \"Set: 800\"], [\"Set: 1000\", \"Set: 1200\", \"Set: 1500\"], [\"⬅️ Back\"]]";
 
 // ==========================================
-// --- HARDWARE CONTROL ---
+// --- LED LOGIC ---
 // ==========================================
+void handleLedStatus() {
+  if (WiFi.status() == WL_CONNECTED) {
+    // === CONNECTED: SOLID ON ===
+    digitalWrite(LED_PIN, LED_ON);  
+  } else {
+    // === DISCONNECTED: OFF ===
+    digitalWrite(LED_PIN, LED_OFF);
+  }
+}
 
-void openDoor() {
-  // Trigger the relay
-  digitalWrite(PIN_RELAY, HIGH);
-  isRelayActive = true;
-  relayOnTime = millis();
-  Serial.println("[ACTION] Relay ON (Opening Door)");
+// ==========================================
+// --- OTA & HELPERS ---
+// ==========================================
+String fixGoogleDriveLink(String url) {
+  if (url.indexOf("drive.google.com") != -1 && url.indexOf("/d/") != -1) {
+    int start = url.indexOf("/d/") + 3; 
+    int end = url.indexOf("/", start);  
+    if (end == -1) end = url.indexOf("?", start);
+    if (end == -1) end = url.length();
+    return "https://drive.google.com/uc?export=download&id=" + url.substring(start, end);
+  }
+  return url; 
+}
+
+void performUpdate(String url) {
+  String cleanUrl = fixGoogleDriveLink(url);
+  
+  if (debugMode) bot.sendMessage(ADMIN_ID, "⏳ OTA...", "");
+  
+  WiFiClientSecure updateClient;
+  updateClient.setInsecure();
+  updateClient.setTimeout(15000); 
+
+  httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+  httpUpdate.rebootOnUpdate(false); 
+
+  t_httpUpdate_return ret = httpUpdate.update(updateClient, cleanUrl);
+  
+  switch (ret) {
+    case HTTP_UPDATE_FAILED: 
+      bot.sendMessage(ADMIN_ID, "❌ Failed:\n" + httpUpdate.getLastErrorString(), ""); 
+      break;
+    case HTTP_UPDATE_NO_UPDATES: 
+      bot.sendMessage(ADMIN_ID, "⚠️ No updates", ""); 
+      break;
+    case HTTP_UPDATE_OK: 
+      bot.sendMessage(ADMIN_ID, "✅ OK! Rebooting...", ""); 
+      shouldReboot = true;
+      break;
+  }
+}
+
+// ==========================================
+// --- HANDLERS ---
+// ==========================================
+void handleNewMessages(int numNewMessages) {
+  for (int i = 0; i < numNewMessages; i++) {
+    String chat_id = String(bot.messages[i].chat_id);
+    String text = bot.messages[i].text;
+    if (chat_id != ADMIN_ID) continue;
+
+    if (text == "/start" || text == "⬅️ Back") {
+      bot.sendMessageWithReplyKeyboard(chat_id, "🏠 Menu", "", KBD_MAIN, true);
+    }
+    else if (text == "🔓 Open" || text == "/open") {
+      digitalWrite(PIN_RELAY, HIGH);
+      isRelayActive = true;
+      relayOnTime = millis();
+      bot.sendMessage(chat_id, "✅ Open", "");
+    }
+    else if (text == "📊 Status" || text == "/status") {
+      int adc = analogRead(PIN_SIGNAL_INPUT);
+      String msg = "📊 **STATUS**\n";
+      msg += "Build: " + String(__DATE__) + " " + String(__TIME__); 
+      bot.sendMessage(chat_id, msg, "Markdown");
+    }
+    else if (text == "🔧 Sensitivity") {
+      bot.sendMessageWithReplyKeyboard(chat_id, "Threshold:", "", KBD_SENS, true);
+    }
+    else if (text.startsWith("Set: ")) {
+      int newVal = text.substring(5).toInt();
+      if (newVal > 0) {
+        signalThreshold = newVal;
+        preferences.begin("intercom", false);
+        preferences.putInt("limit", signalThreshold);
+        preferences.end();
+        bot.sendMessageWithReplyKeyboard(chat_id, "💾 Saved: " + String(signalThreshold), "", KBD_MAIN, true);
+      }
+    }
+    else if (text == "🛠 Diagnostics") {
+       bot.sendMessageWithReplyKeyboard(chat_id, "Debug", "", KBD_DEBUG, true);
+    }
+    else if (text == "🟢 Stream ON") debugMode = true;
+    else if (text == "🔴 Stream OFF") debugMode = false;
+    
+    else if (text.startsWith("/update ")) {
+      performUpdate(text.substring(8));
+    }
+  }
 }
 
 void updateRelay() {
-  // Turn off relay after defined pulse duration
   if (isRelayActive && (millis() - relayOnTime > RELAY_PULSE_MS)) {
     digitalWrite(PIN_RELAY, LOW);
     isRelayActive = false;
-    Serial.println("[ACTION] Relay OFF");
   }
 }
 
 // ==========================================
-// --- SETUP ---
+// --- SETUP & LOOP ---
 // ==========================================
 void setup() {
   Serial.begin(115200);
-  Serial.println(">>> Intercom Controller v34.0 Started (Offline Mode)");
   
-  // Configure Pins
   pinMode(PIN_SIGNAL_INPUT, INPUT);
   pinMode(PIN_RELAY, OUTPUT);
+  pinMode(LED_PIN, OUTPUT);
   
-  // Initial State
+  // === CONFIRMATION BLINKS ===
+  // 5 rapid blinks at startup to show life
+  for(int i=0; i<5; i++) {
+    digitalWrite(LED_PIN, LED_ON);
+    delay(100);
+    digitalWrite(LED_PIN, LED_OFF);
+    delay(100);
+  }
+  // ===========================
+  
   digitalWrite(PIN_RELAY, LOW);
+  digitalWrite(LED_PIN, LED_OFF); 
+
+  preferences.begin("intercom", true); 
+  int savedLimit = preferences.getInt("limit", 0);
+  preferences.end();
+  if (savedLimit > 100) signalThreshold = savedLimit;
+
+  WiFi.begin(ssid, password);
+  client.setCACert(TELEGRAM_CERTIFICATE_ROOT);
+  
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 15) {
+    delay(500);
+    attempts++;
+  }
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    String msg = "✅ **SYSTEM READY**\n";
+    msg += "📅 Build: " + String(__DATE__) + " " + String(__TIME__);
+    bot.sendMessageWithReplyKeyboard(ADMIN_ID, msg, "Markdown", KBD_MAIN, true);
+  }
 }
 
-// ==========================================
-// --- MAIN LOOP ---
-// ==========================================
 void loop() {
-  // 1. Manage Relay State (Non-blocking)
   updateRelay();
+  handleLedStatus(); 
 
-  // 2. Read Analog Signal
+  // Logic
   int adcVal = analogRead(PIN_SIGNAL_INPUT);
-  bool signalActive = (adcVal > SIGNAL_THRESHOLD);
+  if (adcVal > backgroundNoisePeak) backgroundNoisePeak = adcVal;
+  bool signalActive = (adcVal > signalThreshold);
 
-  // 3. Signal Processing Logic
   if (signalActive) {
-    // --- SIGNAL DETECTED ---
-    
     if (!isReceivingSignal) {
-      // Rising Edge: Signal just started
       isReceivingSignal = true;
       signalStartTime = millis();
-      Serial.println(">> Signal DETECTED");
+      maxSignalLevel = adcVal;
     }
-    
-    // While signal is active, we just wait and let millis() count
-    
+    if (adcVal > maxSignalLevel) maxSignalLevel = adcVal;
   } else {
-    // --- NO SIGNAL (IDLE) ---
-    
     if (isReceivingSignal) {
-      // Falling Edge: Signal just ended
       unsigned long duration = millis() - signalStartTime;
       isReceivingSignal = false;
-      
-      Serial.print("<< Signal ENDED. Duration: ");
-      Serial.print(duration);
-      Serial.println(" ms");
-      
-      // Analyze Duration
       if (duration >= MIN_PRESS_TIME && duration <= MAX_PRESS_TIME) {
-        Serial.println("   [v] Valid Logic -> Unlocking...");
-        openDoor();
-      } else {
-        Serial.println("   [x] Invalid Duration -> Ignored");
+        digitalWrite(PIN_RELAY, HIGH);
+        isRelayActive = true;
+        relayOnTime = millis();
+        if (WiFi.status() == WL_CONNECTED) bot.sendMessage(ADMIN_ID, "🔔 Ding-Dong!", "");
       }
     }
   }
+
+  // Diagnostics
+  if (debugMode && !isReceivingSignal && WiFi.status() == WL_CONNECTED) {
+    if (millis() - lastDebugSend > 3000) { 
+        bot.sendMessage(ADMIN_ID, "👀 Noise: " + String(backgroundNoisePeak), "");
+        backgroundNoisePeak = 0; 
+        lastDebugSend = millis();
+    }
+  }
+
+  // Telegram
+  if (!isReceivingSignal && WiFi.status() == WL_CONNECTED && millis() - lastBotCheck > 1000) {
+    int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+    while (numNewMessages) {
+      handleNewMessages(numNewMessages);
+      numNewMessages = bot.getUpdates(bot.last_message_received + 1); 
+    }
+    lastBotCheck = millis();
+  }
   
-  // Small delay to stabilize ADC readings
+  // Reconnect
+  if (WiFi.status() != WL_CONNECTED && millis() - lastWifiCheck > 60000) {
+    WiFi.disconnect();
+    WiFi.reconnect();
+    lastWifiCheck = millis();
+  }
+
+  if (shouldReboot) {
+    delay(1000); 
+    bot.getUpdates(bot.last_message_received + 1);
+    delay(1000);
+    ESP.restart();
+  }
+  
   delay(10);
 }
