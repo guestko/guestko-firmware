@@ -23,7 +23,7 @@ The device monitors the analog intercom line using a custom peak detector circui
 3.  **Components for Peak Detector (Signal Conditioning):**
     * **Diode:** 1N4007 (Essential for blocking negative voltage).
     * **Capacitor:** 4.7 µF (Electrolytic or Ceramic).
-    * **Resistor:** 10 kΩ (Discharge resistor).
+    * **Resistor:** 100 kΩ (Discharge resistor).
 
 ---
 
