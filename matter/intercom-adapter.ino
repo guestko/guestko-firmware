@@ -19,6 +19,7 @@
 #define PIN_RING_INPUT 4   // PC817 output, active LOW (INPUT_PULLUP)
 #define PIN_DOOR_OUTPUT 2  // PhotoMOS TLP172A (or bench load); HIGH = active
 #define PIN_STATUS_LED 8   // Onboard blue LED, active LOW
+#define PIN_BOOT_BUTTON 9  // Hold 5 s to decommission Matter
 
 #define OLED_SDA 5
 #define OLED_SCL 6
@@ -33,6 +34,11 @@ const uint32_t DOOR_PULSE_MS = 2000;
 // --- Status LED (blink on valid ring, solid on door open) ---
 const uint32_t LED_BLINK_INTERVAL_MS = 150;
 const uint8_t RING_BLINK_COUNT = 3;
+
+// --- BOOT button decommission ---
+const uint32_t DECOMMISSION_MS = 5000;
+unsigned long bootPressMs = 0;
+bool bootPressed = false;
 
 // --- Display ---
 U8G2_SSD1306_72X40_ER_F_SW_I2C u8g2(U8G2_R0, OLED_SCL, OLED_SDA, U8X8_PIN_NONE);
@@ -158,11 +164,10 @@ void updateStatusLed() {
 }
 
 void reportRingEvent() {
-  ringSensor.setContact(true);
-  ringSensor.updateAccessory();
-  delay(100);
+  // Contact sensor: true = closed, false = open (triggers Tuya automation)
   ringSensor.setContact(false);
-  ringSensor.updateAccessory();
+  delay(100);
+  ringSensor.setContact(true);
 
   startRingBlink();
   uiState = UI_SENT;
@@ -226,6 +231,23 @@ void updateDoorPulse() {
   }
 }
 
+void checkDecommissionButton() {
+  if (digitalRead(PIN_BOOT_BUTTON) == LOW) {
+    if (!bootPressed) {
+      bootPressed = true;
+      bootPressMs = millis();
+    } else if (millis() - bootPressMs >= DECOMMISSION_MS) {
+      Serial.println("[MATTER] Decommissioning — hold released, device will reboot...");
+      doorSwitch.setOnOff(false);
+      digitalWrite(PIN_DOOR_OUTPUT, LOW);
+      Matter.decommission();
+      bootPressMs = millis();  // avoid repeat until reboot
+    }
+  } else {
+    bootPressed = false;
+  }
+}
+
 void updateUiTimeouts() {
   if (uiState == UI_SENT && millis() >= uiSentUntil) {
     uiState = UI_READY;
@@ -240,6 +262,17 @@ void updateUiTimeouts() {
   }
 }
 
+void printCommissioningInfo() {
+  Serial.println();
+  Serial.println("=== Matter commissioning ===");
+  Serial.println("Smart Life: Add device -> Matter -> scan QR or enter code");
+  Serial.printf("Manual code: %s\n", Matter.getManualPairingCode().c_str());
+  Serial.printf("QR URL: %s\n", Matter.getOnboardingQRCodeUrl().c_str());
+  Serial.println("Open QR URL in a browser to display the code.");
+  Serial.println("============================");
+  Serial.println();
+}
+
 void setup() {
   Serial.begin(115200);
 
@@ -249,6 +282,8 @@ void setup() {
 
   pinMode(PIN_STATUS_LED, OUTPUT);
   digitalWrite(PIN_STATUS_LED, HIGH);
+
+  pinMode(PIN_BOOT_BUTTON, INPUT_PULLUP);
 
   {
     U8G2_SSD1306_128X64_NONAME_F_SW_I2C clearer(U8G2_R0, OLED_SCL, OLED_SDA,
@@ -262,31 +297,36 @@ void setup() {
   u8g2.setContrast(255);
   updateDisplay();
 
-  ringSensor.begin(false);
+  ringSensor.begin(true);  // idle = closed (no ring)
   doorSwitch.begin(false);
   doorSwitch.onChange(onDoorChange);
 
   Matter.begin();
 
   if (Matter.isDeviceCommissioned()) {
-    ringSensor.updateAccessory();
     doorSwitch.updateAccessory();
     Serial.println("Matter commissioned — ready.");
   } else {
     uiState = UI_PAIRING;
     updateDisplay();
-    Serial.println("Waiting for Matter commissioning (Smart Life)...");
+    printCommissioningInfo();
   }
 }
 
 void loop() {
   if (!Matter.isDeviceCommissioned()) {
     uiState = UI_PAIRING;
+    static unsigned long lastQrPrint = 0;
+    if (lastQrPrint == 0 || millis() - lastQrPrint >= 30000) {
+      printCommissioningInfo();
+      lastQrPrint = millis();
+    }
     if (millis() - lastDisplayUpdate >= DISPLAY_INTERVAL_MS) {
       lastDisplayUpdate = millis();
       updateDisplay();
     }
     delay(100);
+    checkDecommissionButton();
     return;
   }
 
@@ -294,6 +334,7 @@ void loop() {
   updateDoorPulse();
   updateStatusLed();
   updateUiTimeouts();
+  checkDecommissionButton();
 
   if (millis() - lastDisplayUpdate >= DISPLAY_INTERVAL_MS) {
     lastDisplayUpdate = millis();

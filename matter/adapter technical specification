@@ -232,9 +232,12 @@ All schedule logic lives in the Tuya app. No NTP, no RTC, no on-device clock.
 
 ## 7. Flashing
 
-1. Open [`intercom-adapter.ino`](intercom-adapter.ino) in Arduino IDE.
+1. Open [`intercom-adapter.ino`](intercom-adapter.ino) in Arduino IDE (keep `partitions.csv` in the same folder).
 2. Board: **ESP32C3 Dev Module**.
-3. Install libraries: **Arduino Matter**, **U8g2**.
-4. Flash via USB (disconnect from intercom wiring first).
-5. Commission in **Smart Life** app (Matter pairing).
-6. Create Tuya automations: auto-open (with time condition) + manual app open.
+3. **Tools → Partition Scheme → Huge APP (3 MB No OTA / 1 MB SPIFFS)** — Matter needs ~2 MB; default 1.2 MB APP is too small.
+4. **Tools → Erase All Flash Before Sketch Upload → Enabled** — clears old Wi-Fi / Matter NVS on first flash.
+5. **Tools → Flash Size → 4 MB** (if available).
+6. Install libraries: **Arduino Matter**, **U8g2**.
+7. Flash via USB (disconnect from intercom wiring first).
+8. Commission in **Smart Life** app (Matter pairing).
+9. Create Tuya automations: auto-open (with time condition) + manual app open + visitor notification.

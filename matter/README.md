@@ -57,10 +57,14 @@ Ring (CA) → PC817 → GPIO4 → duration filter (1–3 s)
 ## Flashing
 
 1. Board: **ESP32C3 Dev Module**
-2. Disconnect adapter from intercom wiring before USB flash
-3. Commission adapter in **Smart Life** (Matter pairing via QR in Serial monitor)
-4. Rename endpoints: **Intercom Ring**, **Intercom Door**
-5. Create automations:
+2. **Partition Scheme:** **Huge APP (3 MB No OTA / 1 MB SPIFFS)** — required (~2 MB Matter firmware)
+3. **Erase All Flash Before Sketch Upload:** **Enabled** (first flash and after partition change)
+4. **Flash Size:** **4 MB** (default on most C3 dev boards)
+5. Open `intercom-adapter.ino` from this repo (`matter/` folder includes `partitions.csv`)
+6. Disconnect adapter from intercom wiring before USB flash
+7. Commission adapter in **Smart Life** (Matter pairing via QR in Serial monitor)
+8. Rename endpoints: **Intercom Ring**, **Intercom Door**
+9. Create automations:
    - Auto-open: ring → door ON, time 16:00–20:00
    - Notify: ring outside 16:00–20:00 → *Someone's at the door!*
    - Manual: tap Intercom Door anytime
