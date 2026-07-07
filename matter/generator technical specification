@@ -8,30 +8,18 @@ Standalone bench device that simulates a real dual-polar (±4 V AC) intercom cal
 
 ## 1. System Architecture
 
-To simulate a classic analog coordinate intercom call line (e.g., Urmet 1132), the generator produces an amplitude-modulated signal:
+To simulate a classic analog coordinate intercom call line (e.g., Urmet 1132), the generator produces a **continuous** tone — as if the entrance call button is held down:
 
 | Parameter | Value |
 |-----------|-------|
 | Carrier | **800 Hz** square wave (fixed) |
-| Rhythm | **250 ms note** + **120 ms pause** (~2.7 notes/s, audible gaps) |
+| Envelope | **Continuous** (no pauses) |
 | Power-up | Signal starts automatically (no button) |
-| Target amplitude | ±4 V AC peak-to-peak (via AC coupling, see §1.2) |
+| Target amplitude | ±4 V AC peak-to-peak (via AC coupling, see §1.1) |
 
-### 1.1. Note / Pause Envelope (Not Mains Hum)
+Continuous output keeps the optocoupler input (diode + 10 µF) charged steadily, matching real ring duration detection on the adapter (1–3 s hold).
 
-Fast 100 Hz gating sounds like **220 V mains buzz** — the ear cannot resolve separate pitches. For **distinct 800 Hz notes**, the gate must stay open long enough to hear the tone (~200+ ms), then a **100+ ms silence**:
-
-```
-Cycle (370 ms):
-  0 – 250 ms:   800 Hz ON   (note)
-  250 – 370 ms: OFF         (pause)
-```
-
-Gating runs on **`esp_timer`** (1 ms tick), independent of OLED refresh.
-
-Tune `NOTE_US` / `PAUSE_US` in firmware if needed.
-
-### 1.2. Single-Supply to Dual-Polar Conversion (AC Coupling)
+### 1.1. Single-Supply to Dual-Polar Conversion (AC Coupling)
 
 An N-channel MOSFET (IRLB8743) acts as a low-side switch (0 V … +Vcc unipolar pulses). A series electrolytic capacitor C1 blocks DC offset and passes only the AC component, shifting the baseline to virtual zero → clean ±4 V waveform.
 
@@ -113,9 +101,8 @@ See [`intercom-signal-generator.ino`](intercom-signal-generator.ino).
 
 | Feature | Description |
 |---------|-------------|
-| Output | 800 Hz notes (250 ms) + 120 ms pause, always on after boot |
-| Gate timing | `esp_timer` 1 ms |
-| OLED UI | `800Hz NOTE` / `250+120ms`, long bar + gap preview |
+| Output | Continuous 800 Hz, always on after boot |
+| OLED UI | `800Hz CONT` / `always on`, scrolling carrier preview |
 
 ### Flashing
 

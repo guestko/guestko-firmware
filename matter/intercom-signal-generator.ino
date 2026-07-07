@@ -1,18 +1,14 @@
 /**
  * Intercom Signal Generator (Bench Calibrator)
  *
- * 800 Hz tone as distinct audible notes separated by short pauses
- * (not fast 100 Hz gating — that sounds like mains hum).
- *
- * Pattern: 250 ms note → 120 ms silence → repeat.
- * Gate timing on esp_timer (independent of OLED).
+ * Continuous 800 Hz tone to simulate a held intercom call button.
+ * Simplifies optocoupler input (diode + cap see steady envelope).
  *
  * See: matter/generator technical specification
  */
 
 #include <Arduino.h>
 #include <U8g2lib.h>
-#include <esp_timer.h>
 
 #define SIGNAL_OUTPUT_PIN 1
 
@@ -20,11 +16,6 @@
 #define OLED_SCL 6
 
 const uint32_t CARRIER_HZ = 800;
-
-// Note / pause rhythm (audible as separate beeps, ~2.7 notes/s)
-const uint32_t NOTE_US = 250000;   // 250 ms — long enough to hear pitch
-const uint32_t PAUSE_US = 120000;  // 120 ms — clear gap between notes
-const uint32_t CYCLE_US = NOTE_US + PAUSE_US;
 
 U8G2_SSD1306_72X40_ER_F_SW_I2C u8g2(U8G2_R0, /* clock=*/OLED_SCL, /* data=*/OLED_SDA,
                                      /* reset=*/U8X8_PIN_NONE);
@@ -38,87 +29,27 @@ unsigned long last_update_time = 0;
 const unsigned long FPS_DELAY = 33;
 int wave_offset = 0;
 
-volatile bool gateOpen = false;
-esp_timer_handle_t gateTimer = nullptr;
-
-bool isGateOpenAtPhase(uint32_t phaseUs) { return phaseUs < NOTE_US; }
-
-void applyGate(bool open) {
-  if (open == gateOpen) {
-    return;
-  }
-  gateOpen = open;
-#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
-  ledcWrite(SIGNAL_OUTPUT_PIN, open ? 128 : 0);
-#else
-  ledcWrite(0, open ? 128 : 0);
-#endif
-}
-
-void gateTimerCallback(void *arg) {
-  (void)arg;
-  uint32_t phase = (uint32_t)(esp_timer_get_time() % CYCLE_US);
-  bool open = isGateOpenAtPhase(phase);
-  if (open != gateOpen) {
-    gateOpen = open;
-#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
-    ledcWrite(SIGNAL_OUTPUT_PIN, open ? 128 : 0);
-#else
-    ledcWrite(0, open ? 128 : 0);
-#endif
-  }
-}
-
-void startGateTimer() {
-  const esp_timer_create_args_t args = {
-      .callback = &gateTimerCallback,
-      .arg = nullptr,
-      .dispatch_method = ESP_TIMER_TASK,
-      .name = "gen_gate",
-      .skip_unhandled_events = true,
-  };
-  esp_timer_create(&args, &gateTimer);
-  esp_timer_start_periodic(gateTimer, 1000);  // 1 ms — enough for 120 ms pauses
-}
-
 void startGenerator() {
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
   ledcAttach(SIGNAL_OUTPUT_PIN, CARRIER_HZ, 8);
+  ledcWrite(SIGNAL_OUTPUT_PIN, 128);
 #else
   ledcSetup(0, CARRIER_HZ, 8);
   ledcAttachPin(SIGNAL_OUTPUT_PIN, 0);
+  ledcWrite(0, 128);
 #endif
-  gateOpen = false;
-  applyGate(isGateOpenAtPhase((uint32_t)(esp_timer_get_time() % CYCLE_US)));
-  startGateTimer();
 }
 
-void drawModulatedWaveform() {
-  const int env_y = Y_OFFSET + 22;
-  const int env_h = 8;
-  const int car_y = Y_OFFSET + 32;
-  const int car_amp = 4;
-
-  // Scrolling: long note block + short gap (~250:120 ms)
-  const int env_period_px = 40;
-  const int note_px = 26;
-
-  for (int x = 0; x < SCREEN_W - 2; x++) {
-    int phase_x = (x + wave_offset) % env_period_px;
-    if (phase_x < note_px) {
-      u8g2.drawVLine(X_OFFSET + 1 + x, env_y, env_h);
-    }
-  }
-  u8g2.drawHLine(X_OFFSET, env_y + env_h, SCREEN_W);
-
+void drawWaveform() {
+  const int car_y = Y_OFFSET + 28;
+  const int car_amp = 6;
   const int car_period = 5;
   const int half = car_period / 2;
 
+  u8g2.drawHLine(X_OFFSET, Y_OFFSET + 22, SCREEN_W);
+  u8g2.drawHLine(X_OFFSET, car_y, SCREEN_W);
+
   for (int x = 0; x < SCREEN_W - 2; x++) {
-    int phase_x = (x + wave_offset) % env_period_px;
-    if (phase_x >= note_px) {
-      continue;
-    }
     int car_phase = (x + wave_offset * 3) % car_period;
     int y = car_y + ((car_phase < half) ? -car_amp : car_amp);
     u8g2.drawPixel(X_OFFSET + 1 + x, y);
@@ -133,13 +64,13 @@ void drawDisplay() {
   u8g2.setCursor(X_OFFSET + 2, Y_OFFSET + 7);
   u8g2.print("800Hz");
   u8g2.setCursor(X_OFFSET + 34, Y_OFFSET + 7);
-  u8g2.print("NOTE");
+  u8g2.print("CONT");
 
   u8g2.setCursor(X_OFFSET + 2, Y_OFFSET + 17);
-  u8g2.print("250+120ms");
+  u8g2.print("always on");
 
   u8g2.drawHLine(X_OFFSET, Y_OFFSET + 19, SCREEN_W);
-  drawModulatedWaveform();
+  drawWaveform();
 
   u8g2.sendBuffer();
   wave_offset++;
@@ -162,7 +93,7 @@ void setup() {
   startGenerator();
   drawDisplay();
 
-  Serial.println(F("Generator: 800 Hz notes 250 ms + 120 ms pause"));
+  Serial.println(F("Generator: continuous 800 Hz"));
 }
 
 void loop() {
