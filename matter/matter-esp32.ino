@@ -157,4 +157,8 @@ void loop() {
 
     // Reset activation counter on device decommissioning
     turnOnCount = 0;
-  matterPref.
+    matterPref.putUInt(countPrefKey, 0);
+    matterPref.clear();
+    Matter.decommission();
+  }
+}

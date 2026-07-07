@@ -1,127 +1,158 @@
-Technical Specification: Intercom Smart Adapter & Receiver (ESP32-C3)This document provides a detailed overview, electrical schematics, and structural logic for the in-unit Intercom Smart Adapter. Designed to fit inside a standard analog handset (e.g., Urmet CS1132), this module intercepts high-voltage ringing signals, implements time-based automatic gate opening, and plays custom RTTTL melodies.1. Core Concepts & Safety IsolationThe analog coordinate lines of multi-family buildings are sensitive. Bridging digital microcontrollers directly onto the bus presents serious risks:Over-voltage: Call lines carry high voltages ($12\text{V AC} - 24\text{V DC}$) containing switching spikes that easily destroy $3.3\text{V}$ logic gates.Line Interference (Off-hook bug): Drawing continuous power from the microphone/audio lines drops the bus impedance, locking the entire building's riser into a permanent "handset lifted" state.1.1. Galvanic Isolation (Optocoupler Guard)We route the incoming ringing wire away from the handset's internal terminal CA and feed it exclusively into a PC817 Optocoupler. This physical light barrier prevents feedback loops, ensuring that the neighbor's handsets and the main control unit are electrically isolated from our microcontroller.2. Principle Electrical Schematic (Adapter Module)  ANALOG INTERCOM INPUT (Call line AC Rectification & Filtering)
-  Riser Line (CA) ─────────>| [Diode 1N4007] |---+---------------+
+# Technical Specification: Intercom Smart Adapter (ESP32-C3 + Tuya/Matter)
+
+This document describes the electrical schematic and software architecture for the in-unit Intercom Smart Adapter. Designed to fit inside a standard analog handset (e.g., Urmet CS1132), the module detects ringing signals via galvanic isolation, reports events to **Tuya Smart Life** over **Matter**, and opens the door latch on command from Tuya automations.
+
+**Firmware:** [`intercom-adapter.ino`](intercom-adapter.ino)
+
+---
+
+## 1. Core Concepts & Safety Isolation
+
+The analog coordinate lines of multi-family buildings are sensitive. Bridging digital microcontrollers directly onto the bus presents serious risks:
+
+- **Over-voltage:** Call lines carry 12 V AC – 24 V DC with switching spikes that destroy 3.3 V logic.
+- **Line interference (Off-hook bug):** Drawing continuous power from audio lines drops bus impedance, locking the riser into a permanent "handset lifted" state.
+
+### 1.1. Galvanic Isolation (Optocoupler Guard)
+
+The incoming ringing wire is routed away from the handset terminal CA and fed exclusively into a **PC817** optocoupler. This light barrier keeps the microcontroller electrically isolated from the building intercom bus.
+
+---
+
+## 2. Electrical Schematic
+
+### 2.1. Call Detector (AC Rectification & Filtering)
+
+```
+Riser Line (CA) ─────────>| [Diode 1N4007] |---+---------------+
                                                  |               |
                                                  | +             |
-                                                 |-[Capacitor]   |----> IN+ (PC817 Optocoupler Input)
-  Handset Pin 6 (GND) <──────────────────────────| (10uF 25V)    |
+                                                 |-[Capacitor]   |----> IN+ (PC817 pin 1)
+  Handset Pin 6 (GND) <──────────────────────────| (10 µF 25V)   |
   (Common System Ground)                         | -             |
-                                                 +--------------> IN- (PC817 Optocoupler Input)
+                                                 +--------------> IN− (PC817 pin 2)
+```
 
-  Output Optocoupler Connection to ESP32:
-  * VCC  ──> 3.3V on ESP32-C3
-  * GND  ──> GND on ESP32-C3
-  * OUT  ──> GPIO4 (Configured with INPUT_PULLUP)
+**PC817 output → ESP32:**
 
------------------------------------------------------------------------------------------
+| PC817 | Connection |
+|-------|------------|
+| Pin 3 (collector) | **GPIO4** (INPUT_PULLUP) |
+| Pin 4 (emitter) | GND |
+| Pull-up (internal) | 3.3 V via ESP32 INPUT_PULLUP |
 
-  AUTOMATIC DOOR RELEASE CIRCUIT (Silent Latch Trigger)
-  We use a silent, contact-free PhotoMOS Solid State Relay (TLP172A) to bridge the handset contacts.
+Logic: active **LOW** during a call (`inverted: true` in software).
 
+**Filter components:**
+- **1N4007** — clips negative half-waves, protects optocoupler LED.
+- **10 µF 25 V** — smooths 50 Hz ripple into stable DC during ringing.
+
+### 2.2. Automatic Door Release (PhotoMOS TLP172A)
+
+A **PhotoMOS** solid-state relay bridges the handset lock contacts silently (no mechanical click).
+
+```
        ESP32-C3                                     PhotoMOS (TLP172A)
      +-----------+                                      +---------+
-     |   GPIO5   |---------[ Resistor 220 Ohm ]--------->| 1 (IN+) |
+     |   GPIO2   |---------[ Resistor 220 Ω ]--------->| 1 (IN+) |
      |           |                                      |         |
-     |    GND    |------------------------------------->| 2 (IN-) |
+     |    GND    |------------------------------------->| 2 (IN−) |
      +-----------+                                      |         |
-                                                        | 3 (OUT) |──> Handset Pin 9 (Lock line)
+                                                        | 3 (OUT) |──> Handset Pin 9 (Lock)
                                                         |         |
                                                         | 4 (OUT) |──> Handset Pin 6 (Ground)
                                                         +---------+
+```
 
------------------------------------------------------------------------------------------
+> **Pin note:** GPIO5/GPIO6 are reserved for the onboard 0.42" OLED (I2C). PhotoMOS moved from GPIO5 → **GPIO2**.
 
-  CUSTOM RINGBACK INJECTION (Playing Melodies on Handset Speaker)
-  To bypass the original dry buzzer, we feed a buffered audio signal into the freed CA contact.
-  The mechanical hook switch automatically disconnects CA from the speaker when the handset is lifted.
+### 2.3. Custom Ringback (Optional)
 
-         External +5V power rail (from regulator/USB)
-                       |
-                       | (Collector)
-                     +---+
-                     | T | BC547 (NPN Transistor)
-                     +---+
-                    /  | (Emitter)
-   (Base)          /   |
-   GPIO18 --------/    +------------> Connect to the freed CA terminal on Urmet PCB
-         [ Resistor 1kOm ]
+```
+External +5 V ──> BC547 collector
+GPIO18 ──[ 1 kΩ ]──> BC547 base
+BC547 emitter ──> Freed CA terminal on Urmet PCB
+```
 
------------------------------------------------------------------------------------------
+### 2.4. OLED 0.42" Display (Onboard, SSD1306 72×40)
 
-  REAL TIME CLOCK (DS3231 I2C Connection)
-  * VCC  ──> 3.3V on ESP32-C3
-  * GND  ──> GND on ESP32-C3
-  * SDA  ──> GPIO8 (I2C SDA)
-  * SCL  ──> GPIO9 (I2C SCL)
-3. Signal Filtering & Automation Logic3.1. Analog Filtering (Diode + Capacitor)The $12\text{V AC}$ call signal contains a $50\text{ Hz}$ sine wave.The Diode (1N4007): Clips the negative half-waves of the alternating current, protecting the optocoupler's internal LED from reverse-voltage degradation.The Capacitor ($10\text{ }\mu\text{F}$): Absorbs voltage peaks during active cycles and discharges during zero-crossing phases. This acts as an analog low-pass filter, flattening the $50\text{ Hz}$ flicker into a smooth, continuous direct current. The optocoupler's output transitions to a stable LOW state during a call, removing input bounce.3.2. Software Gatekeeper LogicRelying on a simple "open on call" logic introduces high security vulnerabilities (interference, static crackles, or brief line testing can trigger false opens).The adapter's firmware enforces a multi-tier verification process:Signal Duration Filter: The signal is actively polled. The gate opening is triggered if and only if the continuous call duration falls strictly between $1.0\text{ and }3.0\text{ seconds}$. Any pulses shorter than $1\text{ s}$ (short interference crackles) or longer than $3\text{ s}$ (stuck call button or line short) are discarded as invalid.NTP/RTC Schedule Lock: Automatic door release is strictly constrained to a pre-defined arrival window (e.g., 16:00 to 20:00). Outside these hours, auto-release is blocked, and the system instead plays custom melodies to alert residents.4. Software Implementations4.1. Local/Offline YAML Configuration (ESPHome)For Home Assistant deployments, ESPHome allows offline state execution utilizing local hardware RTC clocks, ensuring automation remains functional even when Wi-Fi is lost.esphome:
-  name: urmet-intercom-offline
-  comment: "Autonomous ESP32-C3 Intercom Controller"
+| Display | ESP32-C3 |
+|---------|----------|
+| VCC | 3.3 V |
+| GND | GND |
+| SDA | **GPIO5** |
+| SCL | **GPIO6** |
 
-esp32:
-  board: esp32-c3-devkitm-1
-  framework:
-    type: arduino
+Use **Software I2C** (U8g2 SW_I2C driver) — see generator spec §4 for snow/offset fix.
 
-# Local I2C Bus configuration for RTC
-i2c:
-  sda: GPIO8
-  scl: GPIO9
-  scan: true
+---
 
-# Hardware Real-Time Clock Module (DS3231)
-time:
-  - platform: ds3231
-    id: rtc_time
-    timezone: "Europe/Warsaw"
+## 3. GPIO Pinout Summary (ESP32-C3 0.42" OLED Board)
 
-globals:
-  - id: ring_start_time
-    type: uint32_t
-    restore_value: no
-    initial_value: '0'
+| GPIO | Function |
+|------|----------|
+| 4 | PC817 ring detector (INPUT_PULLUP, active LOW) |
+| 2 | PhotoMOS door latch (OUTPUT, 2 s pulse) |
+| 5 | OLED SDA |
+| 6 | OLED SCL |
+| 8 | Onboard blue LED (active LOW, optional) |
+| 9 | BOOT button (not used in adapter firmware) |
+| 18 | BC547 melody injection (optional) |
 
-# PhotoMOS switch on GPIO5 (Bridges Pin 9 & 6)
-switch:
-  - platform: gpio
-    pin: GPIO5
-    name: "Open Door Latch"
-    id: intercom_opener
-    icon: "mdi:door-open"
-    on_turn_on:
-      - delay: 2s
-      - switch.turn_off: intercom_opener
+**Removed from design:** DS3231 RTC module (GPIO8/9 conflict + not needed).
 
-# AC-Filtered Call Detector on GPIO4
-binary_sensor:
-  - platform: gpio
-    pin:
-      number: GPIO4
-      inverted: true # Active LOW from optocoupler pullup
-    name: "Call Inbound"
-    id: ring_sensor
-    
-    on_press:
-      then:
-        - lambda: |-
-            id(ring_start_time) = millis();
+---
 
-    on_release:
-      then:
-        - lambda: |-
-            uint32_t duration = millis() - id(ring_start_time);
-            ESP_LOGI("intercom", "Call ended. Active duration: %u ms", duration);
-            
-            // Verify call duration bounds (1 to 3 seconds)
-            if (duration >= 1000 && duration <= 3000) {
-              auto t = id(rtc_time).now(); // Fetch precise time from DS3231
-              
-              // Validate schedule window (16:00 to 20:00)
-              if (t.is_valid() && t.hour >= 16 && t.hour < 20) {
-                ESP_LOGI("intercom", "Access authorized at %02d:%02d. Releasing latch.", t.hour, t.minute);
-                id(intercom_opener).turn_on();
-              } else {
-                ESP_LOGW("intercom", "Call rejected. Current time: %02d:%02d", t.hour, t.minute);
-              }
-            } else {
-              ESP_LOGW("intercom", "Signal discarded as noise. Duration: %u ms", duration);
-            }
-5. Critical Constraints: Power Stealing & Wake LatencyThe Power Stealing Trap: Attempting to harvest continuous power from the handset microphone line (typical current limit is $1 - 2\text{ mA}$) to power an ESP32 is impossible. In active Wi-Fi mode, the ESP32-C3 generates transmission current spikes of up to $350\text{ mA}$ ($175\times$ more than the line can handle). This immediately drops the line voltage, disabling the intercom across the building.Resolution: The module must be powered from an external $5\text{V}$ power source (such as a miniature AC/DC wall module tucked inside the junction box behind the handset).Deep-Sleep Wake Latency:While the ESP32-C3 consumes only $\approx 43\text{ }\mu\text{A}$ in deep sleep, waking the processor, initializing peripherals, negotiating Wi-Fi protocols, and fetching NTP network time takes $2\text{ to }5\text{ seconds}$. By the time the system is ready, the visitor has released the doorbell.Resolution: Keep the microcontroller always active, or use ultra-fast local RTC timesheets to skip internet-reliant initialization.
+## 4. Software Architecture (Tuya / Matter)
+
+The adapter is **always-on** (external PSU + permanent Wi-Fi). Scheduling, time windows, and notifications are handled in **Tuya Smart Life automations** — not on-device.
+
+### 4.1. On-Device Logic
+
+| Step | Action |
+|------|--------|
+| Ring detected | GPIO4 goes LOW |
+| Duration filter | Accept only 1.0 – 3.0 s (reject noise & stuck buttons) |
+| Valid ring | Report **Contact Sensor** event to Matter → Tuya |
+| Door open | **OnOff switch** endpoint; Tuya automation triggers it → 2 s PhotoMOS pulse |
+
+### 4.2. Tuya Automation Example
+
+```
+WHEN  Intercom Ring sensor → Open
+THEN  Intercom Door switch  → ON
+      (optional) Send phone notification
+      (optional) Time condition: 16:00 – 20:00
+```
+
+All schedule logic lives in the app. No NTP, no RTC, no offline clock required.
+
+### 4.3. OLED Display States
+
+| State | Screen |
+|-------|--------|
+| Boot / idle | `READY` + `TUYA OK` + `WiFi OK` |
+| Commissioning | `PAIRING...` / `Smart Life` |
+| Ring active | `>>> RING <<<` + duration timer |
+| Event sent | `EVENT SENT` → `Tuya` |
+| Door opening | `DOOR OPEN` + progress bar |
+| No network | `NO WiFi` |
+
+---
+
+## 5. Power & Connectivity Constraints
+
+**Power stealing is forbidden.** The ESP32-C3 draws up to 350 mA during Wi-Fi TX — far beyond what the intercom line can supply (~1–2 mA). Use an external 5 V PSU (mini AC/DC module in the junction box).
+
+**Always-on mode.** Deep sleep is not used: Wi-Fi must stay connected for instant Matter event delivery to Tuya.
+
+---
+
+## 6. Flashing
+
+1. Open [`intercom-adapter.ino`](intercom-adapter.ino) in Arduino IDE.
+2. Board: **ESP32C3 Dev Module**.
+3. Install libraries: **Arduino Matter**, **U8g2**.
+4. Flash via USB (disconnect from intercom wiring first).
+5. Commission in **Smart Life** app (Matter pairing).
+6. Create Tuya automation: ring sensor → door switch.

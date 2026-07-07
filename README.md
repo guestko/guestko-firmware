@@ -1,81 +1,95 @@
-# Offline Smart Intercom Controller (for Urmet CS1132 / 1131)
+# Smart Intercom Controller (Urmet CS1132 / 1131)
 
-## 📖 Overview
-This project upgrades a standard analog apartment intercom handset (**Urmet CS1132 Scaitel, 1131, 1140 series**) into an automated entry system using an **ESP32-C3 SuperMini**.
+Upgrade a standard analog apartment intercom handset into an automated entry system using **ESP32-C3**.
 
-**Core Function:**
-The device monitors the intercom line for a ringing signal. If a valid ring is detected (duration between 0.5s and 5s), it automatically triggers the relay to open the door.
+## Project Structure
+
+```
+Smart-Intercom-ESP32/
+├── intercom-esp32-receiver.ino      # Legacy offline receiver (peak detector + relay)
+├── intercom-signal-simulator.ino    # Legacy simple PWM generator
+└── matter/
+    ├── intercom-adapter.ino         # Production: Tuya/Matter adapter + OLED
+    ├── intercom-signal-generator.ino # Bench calibrator with OLED
+    ├── matter-esp32.ino             # Matter PoC switch demo
+    ├── adapter technical specification
+    ├── generator technical specification
+    └── README.md
+```
+
+## Which Firmware to Use?
+
+| Use case | Firmware |
+|----------|----------|
+| **Production install in Urmet handset (Tuya Smart Life)** | `matter/intercom-adapter.ino` |
+| **Bench testing / calibrating receivers** | `matter/intercom-signal-generator.ino` |
+| **Matter protocol experiments** | `matter/matter-esp32.ino` |
+| **Simple offline auto-open (no Wi-Fi)** | `intercom-esp32-receiver.ino` |
+
+---
+
+## Production Adapter (Tuya / Matter)
+
+**Core function:** Detect intercom ring via galvanically isolated PC817 optocoupler, report to Tuya over Matter, open door via PhotoMOS on Tuya automation command.
 
 **Highlights:**
-* **100% Offline:** No WiFi, no Cloud, no delays. Instant boot.
-* **Auto-Open:** Automatically unlocks the door when rung.
-* **Noise Reduction:** Uses a Peak Detector circuit and short relay pulse (0.5s) to prevent audio interference.
-* **Compatibility:** Designed for analog "4+n" systems (Urmet CS1132 PCB, 5025/2D panels).
+- Galvanic isolation (PC817 + PhotoMOS TLP172A)
+- Always-on Wi-Fi + external PSU
+- Scheduling & notifications in **Smart Life** app (no RTC module)
+- 0.42" OLED status display (READY / RING / DOOR OPEN)
+
+See [`matter/adapter technical specification`](matter/adapter%20technical%20specification) for full wiring diagram.
+
+### Quick Wiring (Adapter)
+
+**Ring detector:**
+- CA → 1N4007 → 10 µF → PC817 IN+/IN−
+- PC817 OUT → GPIO4
+- Pin 6 (GND) → common ground
+
+**Door release:**
+- GPIO2 → 220 Ω → PhotoMOS IN+
+- PhotoMOS OUT → Pin 9 ↔ Pin 6
+
+**Display:** onboard OLED on GPIO5 (SDA) / GPIO6 (SCL)
 
 ---
 
-## 🛠 Hardware Required
+## Legacy Offline Receiver
 
-1.  **Microcontroller:** ESP32-C3 SuperMini.
-2.  **Relay Module:** 3.3V High-Level Trigger.
-3.  **Components for Peak Detector:**
-    * **Diode:** 1N4007 (Essential for blocking negative voltage).
-    * **Capacitor:** 4.7 µF (Electrolytic or Ceramic).
-    * **Resistor:** 10 kΩ (Discharge resistor).
+Standalone auto-open without Wi-Fi. Uses peak detector on GPIO3 and relay on GPIO10.
 
----
+See wiring in the sections below (original v34 design).
 
-### 🔌 Wiring Diagram
+### Peak Detector Wiring
 
-**⚠️ SAFETY WARNING:** The Signal Ground is connected to the Intercom Speaker Line (Pin 1). 
-**DO NOT connect the ESP32 to a computer via USB while it is connected to the intercom.** Power the ESP32 only via an isolated USB wall charger or power bank.
+⚠️ **Do not connect USB while wired to intercom.** Use isolated USB charger only.
 
-#### 1. Signal Detection (Peak Detector)
-This circuit converts the intercom's PWM ring signal (~800Hz, +/- 3.5V) into a stable DC voltage for the ESP32.
+- Intercom CA → Diode Anode → Diode Cathode → **GPIO 3**
+- GPIO 3 → Capacitor (+) / Capacitor (−) → GND
+- GPIO 3 → Resistor 10 kΩ → GND
+- Intercom Pin 1 (Speaker) → GND
 
-* **Intercom CA (Call Line / Wywołanie)** -> **Diode Anode (+)**
-* **Diode Cathode (-)** -> **GPIO 3** (ESP32 Input)
+### Relay
 
-* **At the GPIO 3 Node (Parallel connection):**
-    1.  **Capacitor (+)** to GPIO 3, **Capacitor (-)** to GND.
-    2.  **Resistor (10k)** to GPIO 3, **Resistor** to GND.
+- GPIO 10 → Relay IN
+- Pin 9 & 10 → Relay COM / NO
 
-* **Intercom Pin 1 (Speaker Line / Słuchawka)** -> **GND** (ESP32).
+### Logic
 
-#### 2. Door Control (Relay)
-* **ESP32 GPIO 10** -> **Relay IN**.
-* **ESP32 5V/3.3V** -> **Relay VCC**.
-* **ESP32 GND** -> **Relay GND**.
-* **Intercom Pin 9 & 10** -> Connected to Relay **COM** and **NO** (Normally Open) terminals.
+- ADC threshold > 1000 (~0.8 V)
+- Valid ring: 0.5 – 5.0 s → relay pulse 500 ms
 
 ---
 
-## ⚙️ Logic & Timing
+## Flashing
 
-1.  **Signal Detection:**
-    * The code reads the analog voltage on **GPIO 3**.
-    * Threshold: **ADC > 1000** (approx 0.8V). 
-    * Due to the Peak Detector circuit, a valid ring produces ~2.7V DC.
+1. Open the desired `.ino` in Arduino IDE
+2. Board: **ESP32C3 Dev Module**
+3. Install **U8g2** (OLED sketches) and **Matter** library (adapter/PoC)
+4. Flash via USB (disconnect from intercom first)
+5. For adapter: commission in Smart Life, create ring → door automation
 
-2.  **Validation:**
-    * Short glitches (< 500ms) are ignored.
-    * Stuck buttons (> 5000ms) are ignored.
-    * Only signals between **0.5s and 5.0s** trigger the door.
+## License
 
-3.  **Action:**
-    * The relay fires for exactly **500 ms**.
-    * This short pulse is sufficient to unlatch the mechanical lock without causing buzzing on the handset audio line.
-
----
-
-## 🚀 Installation
-
-1.  Connect the ESP32 to your PC (Disconnect from intercom first!).
-2.  Flash `intercom-esp32.ino` using Arduino IDE (Board: ESP32C3 Dev Module).
-3.  Disconnect from PC.
-4.  Wire up to the intercom system.
-5.  Power up via external USB charger.
-6.  System is live immediately.
-
-## 📝 License
 Open Source DIY Project. Use at your own risk.

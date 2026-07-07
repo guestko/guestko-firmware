@@ -1,182 +1,110 @@
-Technical Specification: ESP32-C3 Intercom Signal Generator (Calibrator)This document provides a comprehensive technical overview, electrical schematics, and production-ready firmware for the standalone Intercom Signal Generator. This device is designed to simulate a real, dual-polar ($\pm 4\text{V AC}$) intercom call signal on a test bench to safely calibrate and debug custom receivers/handsets.1. System Architecture & Core ConceptsTo simulate a classic analog coordinate intercom call line (e.g., Urmet 1132) on a lab bench, we need to generate an Amplitude Modulated (AM) signal. The target signal consists of:Carrier Frequency (Audio Tone): $800\text{ Hz} - 1500\text{ Hz}$ square/sine wave.Modulation Frequency: $50\text{ Hz}$ (emulating the unfiltered ripple of the building's central AC power supply).Target Amplitude: $\pm 4\text{V AC}$ peak-to-peak.1.1. Single-Supply to Dual-Polar Conversion (AC Coupling)A standard N-channel MOSFET acts as a Low-Side switch, which can only output unipolar pulses from $0\text{V}$ (GND) to $+V_{cc}$ (DC supply voltage).To obtain a true dual-polar $\pm 4\text{V}$ AC signal without utilizing symmetrical dual-rail power supplies, we implement AC Coupling.A series electrolytic capacitor ($C_1$) blocks the DC offset (average voltage of $+4\text{V}$) and allows only the AC component to pass. This shifts the signal's baseline to a virtual zero, generating a clean $\pm 4\text{V}$ waveform relative to GND.2. Principle Electrical Schematic                                        +V_PSU (External supply, +8V or +16V)
+# Technical Specification: ESP32-C3 Intercom Signal Generator (Calibrator)
+
+Standalone bench device that simulates a real dual-polar (±4 V AC) intercom call signal for safely calibrating and debugging custom receivers/handsets.
+
+**Firmware:** [`intercom-signal-generator.ino`](intercom-signal-generator.ino)
+
+---
+
+## 1. System Architecture
+
+To simulate a classic analog coordinate intercom call line (e.g., Urmet 1132), the generator produces an amplitude-modulated signal:
+
+| Parameter | Value |
+|-----------|-------|
+| Carrier (audio tone) | 800 – 2000 Hz square wave (selectable) |
+| Modulation | 50 Hz ripple (building AC mains emulation) |
+| Target amplitude | ±4 V AC peak-to-peak |
+
+### 1.1. Single-Supply to Dual-Polar Conversion (AC Coupling)
+
+An N-channel MOSFET (IRLB8743) acts as a low-side switch (0 V … +Vcc unipolar pulses). A series electrolytic capacitor C1 blocks DC offset and passes only the AC component, shifting the baseline to virtual zero → clean ±4 V waveform.
+
+---
+
+## 2. Electrical Schematic
+
+```
+                                        +V_PSU (External supply, +8V or +16V)
                                          |
                                          +-----------+
                                          |           |
                                         [ ] R_pull   |
-                                        [ ] (220 Ohm |
+                                        [ ] (220 Ω   |
                                          |   or 47   |  C1 (Decoupling Capacitor)
-                                         |   Ohm)     |  + | | -
-      ESP32-C3                           +-----------+----+ | |-----+------> OUTPUT (+-4V AC)
+                                         |   Ω)      |  + | | -
+      ESP32-C3                           +-----------+----+ | |-----+------> OUTPUT (±4V AC)
     +-----------+                        |                | |       |
-    |   GPIO1   |--[ R_gate 100 Ohm ]--+  | (Drain / D)             |
-    |           |                     |  |                          |
-    |    GND    |--+                  |  v                          [ ] R_load
-    +-----------+  |                 +---+ IRLB8743                 [ ] (Oscilloscope /
-                   |                 | T |                          |    45 Ohm handset speaker)
-                   |   [ R_gnd ]     +---+                          |
-                   |   [ 10 k6m ]     |  | (Source / S)             |
-                   |       |          |  |                          |
-                   +-------+----------+--+--------------------------+------> COMMON GND (PSU Negative)
+    |   GPIO1   |--[ R_gate 100 Ω ]--+   | (Drain / D)             |
+    |           |                    |   |                          |
+    |    GND    |--+                 |   v                          [ ] R_load
+    +-----------+  |                +---+ IRLB8743                 [ ] (Oscilloscope /
+                   |                | T |                          |    45 Ω speaker)
+                   |   [ R_gnd ]    +---+                          |
+                   |   [ 10 kΩ ]     |  | (Source / S)             |
+                   |       |         |  |                          |
+                   +-------+---------+--+--------------------------+------> COMMON GND
+```
 
-    OLED 0.42" DISPLAY CONNECTION (SSD1306, 72x40) via Software I2C:
-    * VCC Display  ──> Pin 3.3V on ESP32-C3
-    * GND Display  ──> Common GND
-    * SCL Display  ──> GPIO6 (Pin 6) on ESP32-C3
-    * SDA Display  ──> GPIO5 (Pin 5) on ESP32-C3
-    * Tactile Button (Frequency Switch) ──> GPIO3 (Pin 3) and Common GND
-3. Hardware Component CalculationsThe output impedance matching is critical to prevent signal degradation when loading the generator.Scenario A: High-Impedance Load (Oscilloscope / $>10\text{ M}\Omega$)External PSU Voltage: $+8\text{V}$ DC.Pull-up Resistor ($R_{\text{pull}}$): $220\text{ }\Omega$ (power rating $0.25\text{W}$).Operation: When the MOSFET is closed, $C_1$ charges to almost $+8\text{V}$. When open, it discharges to $0\text{V}$. The capacitor shifts this $0\dots 8\text{V}$ unipolar signal to a symmetrical $\pm 4\text{V}$ AC wave.Scenario B: Low-Impedance Load (45 Ohm Handset Speaker)The handset speaker shunts the output line, acting as a voltage divider with $R_{\text{pull}}$.External PSU Voltage: Must be increased to $+16\text{V}$ DC.Pull-up Resistor ($R_{\text{pull}}$): Must be decreased to $47\text{ }\Omega$ (Must be rated at least $2\text{W}$, as it dissipates significant heat).Operation: The voltage divider ($47\text{ }\Omega$ pull-up and $45\text{ }\Omega$ speaker load) reduces the peak voltage:$$U_{\text{max}} = 16\text{V} \times \frac{45\,\Omega}{47\,\Omega + 45\,\Omega} \approx 7.8\text{V}$$After passing through $C_1$, this $7.8\text{V}$ peak-to-peak signal converts to a perfectly safe and loud $\pm 3.9\text{V}$ AC signal driving the speaker.Decoupling Capacitor ($C_1$): $10\text{ \mu F} - 47\text{ \mu F}$ electrolytic capacitor rated for at least $25\text{V}$ ($50\text{V}$ recommended). Connect the positive pin (+) to the MOSFET Drain and the negative pin (-) to the output terminal.4. OLED 0.42" Display Calibration & Address FixesThe ultra-compact $0.42"$ OLED screen (SSD1306, $72\times 40$) has two major integration pitfalls:The 32-byte I2C Buffer Limit: The hardware Wire library of ESP32-C3 cuts off data transmissions beyond 32 bytes, causing static pixel noise ("snow") on the right half of the $72\times 40$ screen.Solution: Using Software I2C (U8G2_..._SW_I2C) bypasses the buffer size constraint, transmitting full-frame packets reliably.Hardware Column Offset: The $72\times 40$ matrix is physically centered on a standard 128x64 silicon die.Solution: We run a dual-initialization trick in setup(). First, we initialize a virtual 128x64 driver, writing zeros to clear the entire GDDRAM of the chip (permanently killing the "snow"). We then initialize the target 72x40 driver with hardware offsets: X_OFFSET = 30 and Y_OFFSET = 12.5. Production-Ready Firmware (Arduino C++)This sketch configures a stable signal generator with real-time UI display on the $0.42"$ screen. GPIO3 toggles the output through telecom-standard frequencies.#include <Arduino.h>
-#include <U8g2lib.h>
+### OLED 0.42" Display (SSD1306, 72×40) — Software I2C
 
-// PWM Output Pin connected to the Gate of IRLB8743
-#define SIGNAL_OUTPUT_PIN 1
+| Display | ESP32-C3 |
+|---------|----------|
+| VCC | 3.3 V |
+| GND | GND |
+| SCL | **GPIO6** |
+| SDA | **GPIO5** |
+| Button (freq toggle) | **GPIO3** → GND |
 
-// Debounced tactile button for frequency toggle
-#define BUTTON_PIN 3
+---
 
-// Software I2C Pins for OLED
-#define OLED_SDA 5
-#define OLED_SCL 6
+## 3. Hardware Component Calculations
 
-// Main driver for 72x40 display
-U8G2_SSD1306_72X40_ER_F_SW_I2C u8g2(U8G2_R0, /* clock=*/ OLED_SCL, /* data=*/ OLED_SDA, /* reset=*/ U8X8_PIN_NONE);
+### Scenario A: High-Impedance Load (Oscilloscope / >10 MΩ)
 
-// Calibration Offsets for 0.42" screen centering
-const int X_OFFSET = 30; 
-const int Y_OFFSET = 12; 
-const int SCREEN_W = 72;  
-const int SCREEN_H = 40;  
+| Parameter | Value |
+|-----------|-------|
+| PSU | +8 V DC |
+| R_pull | 220 Ω (0.25 W) |
+| Output | ±4 V AC via C1 |
 
-// Preset test frequencies corresponding to common analog intercom systems
-const uint32_t TEST_FREQUENCIES[] = {0, 400, 800, 1200, 1600, 2000}; 
-const int FREQ_COUNT = sizeof(TEST_FREQUENCIES) / sizeof(TEST_FREQUENCIES[0]);
-int current_freq_index = 2; // Default to 800 Hz
+### Scenario B: Low-Impedance Load (45 Ω Handset Speaker)
 
-int last_button_state = HIGH;
-int button_state = HIGH;
-unsigned long last_debounce_time = 0;
-const unsigned long DEBOUNCE_DELAY = 50;
+| Parameter | Value |
+|-----------|-------|
+| PSU | +16 V DC |
+| R_pull | 47 Ω (≥2 W) |
+| Output | ≈ ±3.9 V AC |
 
-unsigned long last_update_time = 0;
-const unsigned long FPS_DELAY = 33; // ~30 FPS
-int wave_offset = 0;
+$$U_{\text{max}} = 16\text{V} \times \frac{45\,\Omega}{47\,\Omega + 45\,\Omega} \approx 7.8\text{V}$$
 
-void setGeneratorFrequency(uint32_t freq) {
-  if (freq == 0) {
-    #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
-      ledcWrite(SIGNAL_OUTPUT_PIN, 0); // Disable output (pure GND)
-    #else
-      ledcWrite(0, 0);
-    #endif
-    return;
-  }
-  
-  #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
-    ledcAttach(SIGNAL_OUTPUT_PIN, freq, 8);
-    ledcWrite(SIGNAL_OUTPUT_PIN, 128); // 50% duty cycle
-  #else
-    ledcSetup(0, freq, 8);
-    ledcAttachPin(SIGNAL_OUTPUT_PIN, 0);
-    ledcWrite(0, 128); // 50% duty cycle
-  #endif
-}
+**C1:** 10 – 47 µF electrolytic, ≥25 V (50 V recommended). Positive pin to MOSFET Drain, negative to output.
 
-void setup() {
-  Serial.begin(115200);
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
-  
-  // --- DUAL-INIT TRICK TO ERASE COOM/SEG MEMORY SNOW ---
-  {
-    U8G2_SSD1306_128X64_NONAME_F_SW_I2C clearer(U8G2_R0, OLED_SCL, OLED_SDA, U8X8_PIN_NONE);
-    clearer.begin();
-    clearer.clearBuffer();
-    clearer.sendBuffer(); // Zero out all 128x64 columns
-  }
-  
-  // Start the calibrated 72x40 driver
-  u8g2.begin();
-  u8g2.setContrast(255);
-  u8g2.clearBuffer();
+---
 
-  setGeneratorFrequency(TEST_FREQUENCIES[current_freq_index]);
-  Serial.println(F("Bench Generator Activated."));
-}
+## 4. OLED 0.42" Display — Integration Notes
 
-void loop() {
-  // Button Debounce and Frequency Switching
-  int reading = digitalRead(BUTTON_PIN);
-  if (reading != last_button_state) { 
-    last_debounce_time = millis(); 
-  }
-  
-  if ((millis() - last_debounce_time) > DEBOUNCE_DELAY) {
-    if (reading != button_state) {
-      button_state = reading;
-      if (button_state == LOW) {
-        current_freq_index = (current_freq_index + 1) % FREQ_COUNT;
-        uint32_t new_freq = TEST_FREQUENCIES[current_freq_index];
-        setGeneratorFrequency(new_freq);
-        Serial.printf("[GEN] Active frequency: %d Hz\n", new_freq);
-      }
-    }
-  }
-  last_button_state = reading;
+Two common pitfalls on the 72×40 SSD1306:
 
-  // Screen Refresh and Real-time Oscilloscope Visualization
-  unsigned long now = millis();
-  if (now - last_update_time >= FPS_DELAY) {
-    last_update_time = now;
-    u8g2.clearBuffer();
-    u8g2.setFont(u8g2_font_5x7_tr);
-    
-    // Draw boundary frame relative to physical screen glass
-    u8g2.drawFrame(X_OFFSET, Y_OFFSET, SCREEN_W, SCREEN_H);
-    
-    // Line 1: GPIO pin and target voltage
-    u8g2.setCursor(X_OFFSET + 4, Y_OFFSET + 7);
-    u8g2.print("P:1");
-    u8g2.setCursor(X_OFFSET + 32, Y_OFFSET + 7);
-    u8g2.print("+/-4.0V");
-    
-    // Line 2: Active frequency status
-    u8g2.setCursor(X_OFFSET + 4, Y_OFFSET + 15);
-    u8g2.print("F:");
-    uint32_t active_freq = TEST_FREQUENCIES[current_freq_index];
-    if (active_freq > 0) {
-      u8g2.print(active_freq);
-      u8g2.print("Hz");
-    } else {
-      u8g2.print("OFF");
-    }
-    
-    // UI separator line
-    u8g2.drawHLine(X_OFFSET, Y_OFFSET + 18, SCREEN_W);
-    
-    // Line 3: Animated square-wave matching selected frequency
-    int wave_y_center = Y_OFFSET + 29;
-    int wave_amplitude = 7;
-    
-    if (active_freq > 0) {
-      // Scale visual period on screen based on generating frequency
-      int period = 4000 / active_freq; 
-      if (period < 4) period = 4;
-      if (period > 24) period = 24;
-      int half_period = period / 2;
+1. **32-byte I2C buffer limit** (ESP32-C3 Hardware Wire) causes snow on the right half → use **Software I2C** (`U8G2_..._SW_I2C`).
+2. **Column offset** — 72×40 matrix is centered on 128×64 die → dual-init trick in `setup()`: clear via 128×64 driver, then use 72×40 with offsets X=30, Y=12.
 
-      for (int x = 0; x < SCREEN_W - 2; x++) {
-        int phase = (x + wave_offset) % period;
-        int y_offset = (phase < half_period) ? -wave_amplitude : wave_amplitude;
-        
-        u8g2.drawPixel(X_OFFSET + 1 + x, wave_y_center + y_offset);
-        
-        if (phase == 0 || phase == half_period) {
-          u8g2.drawVLine(X_OFFSET + 1 + x, wave_y_center - wave_amplitude, wave_amplitude * 2);
-        }
-      }
-    } else {
-      u8g2.drawHLine(X_OFFSET + 1, wave_y_center, SCREEN_W - 2);
-    }
-    
-    u8g2.sendBuffer();
-    wave_offset++; 
-  }
-}
+---
+
+## 5. Firmware Overview
+
+See [`intercom-signal-generator.ino`](intercom-signal-generator.ino).
+
+| Feature | Description |
+|---------|-------------|
+| Frequency presets | 0 (OFF), 400, 800, 1200, 1600, 2000 Hz |
+| Button GPIO3 | Cycles through presets |
+| PWM output GPIO1 | Drives MOSFET gate |
+| OLED UI | Frequency, voltage label, animated waveform |
+
+### Flashing
+
+1. Open `intercom-signal-generator.ino` in Arduino IDE.
+2. Board: **ESP32C3 Dev Module**.
+3. Install **U8g2** library.
+4. Flash via USB.

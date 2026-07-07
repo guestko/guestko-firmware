@@ -1,24 +1,59 @@
-## Project Summary: Universal Matter-Based Smart Switch PoC
+# Matter / Tuya Intercom Modules
 
-This project serves as a **Proof of Concept (PoC)** for a universal, commercial-grade smart switch/intercom controller built on the open-source **Matter** protocol using an ultra-compact **ESP32-C3 OLED Development Board**. 
+ESP32-C3 firmware for the Smart Intercom project: bench signal generator, Matter PoC switch, and production intercom adapter for Tuya Smart Life.
 
-By bypassing proprietary ecosystems and legacy local servers, this solution embraces the modern Matter standard. It provides a decentralized, secure, and cross-platform hardware accessory capable of operating simultaneously across all major smart home fabrics (Apple Home, Google Home, Smart Life/Tuya) entirely locally.
+## Firmware Files
 
-### 🚀 Key Features
+| Sketch | Purpose |
+|--------|---------|
+| [`intercom-adapter.ino`](intercom-adapter.ino) | **Production adapter** — ring detection (PC817), door control (PhotoMOS), Matter → Tuya, OLED UI |
+| [`intercom-signal-generator.ino`](intercom-signal-generator.ino) | **Bench calibrator** — ±4 V AC signal generator with OLED |
+| [`matter-esp32.ino`](matter-esp32.ino) | **Matter PoC** — OnOff light demo with OLED and activation counter |
 
-* **Universal Ecosystem Integration:** Powered by the Matter protocol for seamless, ultra-low latency, and local multi-fabric control across Apple Home, Google Home, and Tuya apps.
-* **Zero-Config Wi-Fi Provisioning:** Employs Bluetooth Low Energy (BLE) commissioning. Network credentials are securely transmitted directly from the user's smartphone during initial setup—eliminating the need for hardcoded Wi-Fi SSIDs or passwords in the source code.
-* **Persistent Metrics Tracking:** Automatically logs and tracks device usage via an activation counter. Utilizing the embedded `Preferences` library, metric data is written to the ESP32's non-volatile storage (NVS) using safe key-value journaling to prevent flash memory wear while surviving unexpected power cuts.
-* **Real-Time Micro-OLED Interface:** Integrates a 0.42" OLED screen driven by the lightweight `U8g2` library. The display dynamically visualizes pairing states (`PAIRING...`), real-time operations (`STATUS: ON/OFF`), and total telemetry data (`COUNT`).
-* **Hardware-Level Overrides:** Programmed debounced routing via the physical BOOT button for immediate local control, paired with a 5-second long-press trigger for localized device decommissioning and factory resets.
+## Technical Specifications
 
-### 🛠 Hardware Specification & Pinout
+| Document | Description |
+|----------|-------------|
+| [`adapter technical specification`](adapter%20technical%20specification) | Adapter wiring, PhotoMOS, optocoupler, Tuya/Matter architecture |
+| [`generator technical specification`](generator%20technical%20specification) | Signal generator schematic and OLED notes |
 
-The software architecture is specifically tuned to match the hardware-level quirks of the specialized **ESP32-C3 0.42" OLED** board variants:
+## Hardware: ESP32-C3 0.42" OLED Board
 
-| Component | Pin (GPIO) | Configuration Notes |
-| :--- | :--- | :--- |
-| **Onboard Blue LED** | `GPIO 8` | Set up with inverted (**Active-LOW**) logic |
-| **BOOT Button** | `GPIO 9` | Configured with internal `INPUT_PULLUP` for toggling/resetting |
-| **OLED Display SDA** | `GPIO 5` | Hardware I2C Data Line (SSD1306 72x40 matrix) |
-| **OLED Display SCL** | `GPIO 6` | Hardware I2C Clock Line (SSD1306 72x40 matrix) |
+| Component | GPIO | Notes |
+|-----------|------|-------|
+| OLED SDA | 5 | Software I2C (adapter/generator) or HW I2C (PoC) |
+| OLED SCL | 6 | |
+| Blue LED | 8 | Active LOW |
+| BOOT button | 9 | PoC only |
+| Ring input (adapter) | 4 | PC817, active LOW |
+| Door output (adapter) | 2 | PhotoMOS TLP172A |
+| Signal PWM (generator) | 1 | IRLB8743 MOSFET gate |
+| Freq button (generator) | 3 | |
+
+## Adapter Architecture (Tuya)
+
+```
+Ring (CA) → PC817 → GPIO4 → duration filter (1–3 s)
+                                    ↓
+                          Matter Contact Sensor → Tuya
+                                    ↓
+                    Tuya automation (schedule, notify, …)
+                                    ↓
+                          Matter OnOff Switch → GPIO2 → PhotoMOS → Door
+```
+
+- **Always-on** Wi-Fi + external PSU
+- **No RTC / DS3231** — scheduling in Smart Life app
+- **OLED states:** READY, RING, EVENT SENT, DOOR OPEN, PAIRING, NO WiFi
+
+## Required Libraries (Arduino IDE)
+
+- [U8g2](https://github.com/olikraus/U8g2_Arduino) — OLED display
+- [ESP32 Arduino Matter](https://github.com/espressif/arduino-esp32) — adapter & PoC (enable Matter in board support)
+
+## Flashing
+
+1. Board: **ESP32C3 Dev Module**
+2. Disconnect adapter from intercom wiring before USB flash
+3. Commission adapter in **Smart Life** (Matter pairing via QR in Serial monitor)
+4. Create automation: *When ring sensor opens → turn door switch ON*
