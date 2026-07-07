@@ -4,6 +4,8 @@ This document describes the electrical schematic and software architecture for t
 
 **Firmware:** [`intercom-adapter.ino`](intercom-adapter.ino)
 
+> **v1 design rule:** The factory CA audio path is **never cut**. The adapter only **listens** (optocoupler tap) and **adds** door control (PhotoMOS in parallel). Custom ringback / CA injection is **out of scope** for v1 — see branch `matter-custom-audio`.
+
 ---
 
 ## 1. Core Concepts & Safety Isolation
@@ -13,24 +15,55 @@ The analog coordinate lines of multi-family buildings are sensitive. Bridging di
 - **Over-voltage:** Call lines carry 12 V AC – 24 V DC with switching spikes that destroy 3.3 V logic.
 - **Line interference (Off-hook bug):** Drawing continuous power from audio lines drops bus impedance, locking the riser into a permanent "handset lifted" state.
 
-### 1.1. Galvanic Isolation (Optocoupler Guard)
+### 1.1. Fail-Safe Principle (CA Never Cut)
 
-The incoming ringing wire is routed away from the handset terminal CA and fed exclusively into a **PC817** optocoupler. This light barrier keeps the microcontroller electrically isolated from the building intercom bus.
+The intercom must remain fully functional **without the adapter**:
+
+| Function | v1 approach | If ESP is off / hung / no apartment power |
+|----------|-------------|---------------------------------------------|
+| Ring sound | Factory CA → buzzer path **unchanged** | Works (handset powered from riser) |
+| Talk / listen | Factory PCB **unchanged** | Works |
+| Door button | Factory pin 9–6 button **unchanged** | Works |
+| Auto-open / app | PhotoMOS + Matter (additive) | Unavailable — expected |
+
+The adapter is an **overlay**, not a single point of failure in the intercom signal path.
+
+### 1.2. Galvanic Isolation (Optocoupler Guard)
+
+Ring detection uses a **high-impedance parallel tap** on CA into a **PC817** optocoupler. The factory CA → buzzer route stays intact. The optocoupler provides a light barrier between the building bus and ESP32 GPIO.
 
 ---
 
 ## 2. Electrical Schematic
 
-### 2.1. Call Detector (AC Rectification & Filtering)
+### 2.1. System Overview
 
 ```
-Riser Line (CA) ─────────>| [Diode 1N4007] |---+---------------+
-                                                 |               |
-                                                 | +             |
-                                                 |-[Capacitor]   |----> IN+ (PC817 pin 1)
-  Handset Pin 6 (GND) <──────────────────────────| (10 µF 25V)   |
-  (Common System Ground)                         | -             |
-                                                 +--------------> IN− (PC817 pin 2)
+  CA (from riser)
+       │
+       ├──────────────────────────────────────> Factory buzzer path (DO NOT CUT)
+       │
+       └──> [1N4007] ── [10 µF] ── PC817 IN+ / IN− ──> GPIO4 (listen only)
+
+  Pin 9 (lock) ──┬── Factory "Open" button ── Pin 6 (GND)
+                 │
+                 └── PhotoMOS OUT (parallel, normally open when idle)
+
+  ESP32-C3: external 5 V PSU (NOT from intercom line)
+```
+
+### 2.2. Call Detector — Parallel Tap (AC Rectification & Filtering)
+
+```
+  CA ──────────┬────────────────────────────> To factory Urmet buzzer (unchanged)
+               │
+               └──────>| [1N4007] |---+---------------+
+                                      |               |
+                                      | +             |
+                                      |-[Capacitor]   |----> IN+ (PC817 pin 1)
+  Handset Pin 6 (GND) <────────────────| (10 µF 25V)  |
+  (Common System Ground)               | -             |
+                                      +--------------> IN− (PC817 pin 2)
 ```
 
 **PC817 output → ESP32:**
@@ -41,15 +74,17 @@ Riser Line (CA) ─────────>| [Diode 1N4007] |---+--------------
 | Pin 4 (emitter) | GND |
 | Pull-up (internal) | 3.3 V via ESP32 INPUT_PULLUP |
 
-Logic: active **LOW** during a call (`inverted: true` in software).
+Logic: active **LOW** during a call.
 
 **Filter components:**
 - **1N4007** — clips negative half-waves, protects optocoupler LED.
 - **10 µF 25 V** — smooths 50 Hz ripple into stable DC during ringing.
 
-### 2.2. Automatic Door Release (PhotoMOS TLP172A)
+**Wiring rule:** Solder the tap onto CA **before** or **alongside** the existing factory connection. Never remove the factory CA trace to the buzzer.
 
-A **PhotoMOS** solid-state relay bridges the handset lock contacts silently (no mechanical click).
+### 2.3. Automatic Door Release — PhotoMOS in Parallel (TLP172A)
+
+PhotoMOS is wired **in parallel** with the handset "Open" button contacts. When idle (ESP off or GPIO low), outputs are open — the physical button works normally.
 
 ```
        ESP32-C3                                     PhotoMOS (TLP172A)
@@ -62,17 +97,12 @@ A **PhotoMOS** solid-state relay bridges the handset lock contacts silently (no 
                                                         |         |
                                                         | 4 (OUT) |──> Handset Pin 6 (Ground)
                                                         +---------+
+                              ║  (parallel with factory button on pin 9–6)
 ```
 
-> **Pin note:** GPIO5/GPIO6 are reserved for the onboard 0.42" OLED (I2C). PhotoMOS moved from GPIO5 → **GPIO2**.
+> **Pin note:** GPIO5/GPIO6 are reserved for the onboard 0.42" OLED (I2C). PhotoMOS uses **GPIO2**.
 
-### 2.3. Custom Ringback (Optional)
-
-```
-External +5 V ──> BC547 collector
-GPIO18 ──[ 1 kΩ ]──> BC547 base
-BC547 emitter ──> Freed CA terminal on Urmet PCB
-```
+Door pulse: **2 s** active, then forced OFF in firmware.
 
 ### 2.4. OLED 0.42" Display (Onboard, SSD1306 72×40)
 
@@ -84,6 +114,12 @@ BC547 emitter ──> Freed CA terminal on Urmet PCB
 | SCL | **GPIO6** |
 
 Use **Software I2C** (U8g2 SW_I2C driver) — see generator spec §4 for snow/offset fix.
+
+### 2.5. Custom Ringback — Not in v1
+
+Cutting CA and injecting audio via BC547 makes the ring depend on ESP — rejected for production v1.
+
+Future experiments (SPDT toggle, NC relay bypass): branch **`matter-custom-audio`**.
 
 ---
 
@@ -97,35 +133,45 @@ Use **Software I2C** (U8g2 SW_I2C driver) — see generator spec §4 for snow/of
 | 6 | OLED SCL |
 | 8 | Onboard blue LED (active LOW, optional) |
 | 9 | BOOT button (not used in adapter firmware) |
-| 18 | BC547 melody injection (optional) |
 
-**Removed from design:** DS3231 RTC module (GPIO8/9 conflict + not needed).
+**Not used in v1:** GPIO18 (melody), DS3231 RTC.
 
 ---
 
 ## 4. Software Architecture (Tuya / Matter)
 
-The adapter is **always-on** (external PSU + permanent Wi-Fi). Scheduling, time windows, and notifications are handled in **Tuya Smart Life automations** — not on-device.
+The adapter is **always-on** (external PSU + permanent Wi-Fi). ESP is always connected for ring detection and door control. **Schedule affects only auto-open logic** — not ring sound, not the physical door button.
 
 ### 4.1. On-Device Logic
 
 | Step | Action |
 |------|--------|
-| Ring detected | GPIO4 goes LOW |
+| Ring detected | GPIO4 goes LOW (parallel tap, factory audio unaffected) |
 | Duration filter | Accept only 1.0 – 3.0 s (reject noise & stuck buttons) |
 | Valid ring | Report **Contact Sensor** event to Matter → Tuya |
-| Door open | **OnOff switch** endpoint; Tuya automation triggers it → 2 s PhotoMOS pulse |
+| Door open | **OnOff switch** endpoint; 2 s PhotoMOS pulse when triggered |
 
-### 4.2. Tuya Automation Example
+### 4.2. Tuya Automations
+
+**Auto-open (working hours only):**
 
 ```
 WHEN  Intercom Ring sensor → Open
-THEN  Intercom Door switch  → ON
-      (optional) Send phone notification
-      (optional) Time condition: 16:00 – 20:00
+IF    Time 16:00 – 20:00          ← schedule: auto-open ONLY
+THEN  Intercom Door switch → ON
+      (optional) Phone notification
 ```
 
-All schedule logic lives in the app. No NTP, no RTC, no offline clock required.
+**Manual open from app (always):**
+
+```
+WHEN  Tap "Open door" in Smart Life   ← no time condition
+THEN  Intercom Door switch → ON
+```
+
+**Outside working hours:** ring sounds normally (factory buzzer), physical button works, app open works, **auto-open does not run**.
+
+All schedule logic lives in the Tuya app. No NTP, no RTC, no on-device clock.
 
 ### 4.3. OLED Display States
 
@@ -136,23 +182,40 @@ All schedule logic lives in the app. No NTP, no RTC, no offline clock required.
 | Ring active | `>>> RING <<<` + duration timer |
 | Event sent | `EVENT SENT` → `Tuya` |
 | Door opening | `DOOR OPEN` + progress bar |
-| No network | `NO WiFi` |
+| No network | `NO WiFi` (ring & button still work) |
 
 ---
 
-## 5. Power & Connectivity Constraints
+## 5. Fail-Safe & Degraded Operation
+
+| Condition | Ring | Handset button | App / auto-open |
+|-----------|------|----------------|-----------------|
+| ESP hung | ✅ factory | ✅ | ❌ until reboot |
+| No apartment 220V | ✅* | ✅* | ❌ (ESP unpowered) |
+| No Wi-Fi | ✅ | ✅ | ❌ |
+| Normal, outside schedule | ✅ | ✅ | ✅ app, ❌ auto |
+
+\*Handset typically powered from building riser, not apartment mains.
+
+**Firmware recommendations:** watchdog timer, no long blocking delays, force PhotoMOS OFF in `setup()`.
+
+**Hardware rules:** never cut CA; never replace lock button with PhotoMOS only; never power ESP from intercom line.
+
+---
+
+## 6. Power & Connectivity Constraints
 
 **Power stealing is forbidden.** The ESP32-C3 draws up to 350 mA during Wi-Fi TX — far beyond what the intercom line can supply (~1–2 mA). Use an external 5 V PSU (mini AC/DC module in the junction box).
 
-**Always-on mode.** Deep sleep is not used: Wi-Fi must stay connected for instant Matter event delivery to Tuya.
+**Always-on mode.** Deep sleep is not used: Wi-Fi must stay connected for Matter event delivery to Tuya.
 
 ---
 
-## 6. Flashing
+## 7. Flashing
 
 1. Open [`intercom-adapter.ino`](intercom-adapter.ino) in Arduino IDE.
 2. Board: **ESP32C3 Dev Module**.
 3. Install libraries: **Arduino Matter**, **U8g2**.
 4. Flash via USB (disconnect from intercom wiring first).
 5. Commission in **Smart Life** app (Matter pairing).
-6. Create Tuya automation: ring sensor → door switch.
+6. Create Tuya automations: auto-open (with time condition) + manual app open.

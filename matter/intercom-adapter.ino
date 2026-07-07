@@ -18,7 +18,6 @@
 // --- GPIO (ESP32-C3 0.42" OLED board) ---
 #define PIN_RING_INPUT 4   // PC817 output, active LOW (INPUT_PULLUP)
 #define PIN_DOOR_OUTPUT 2  // PhotoMOS TLP172A (GPIO5 = OLED SDA)
-#define PIN_MELODY 18      // BC547 base (optional custom ringback)
 
 #define OLED_SDA 5
 #define OLED_SCL 6
@@ -193,9 +192,7 @@ void setup() {
 
   pinMode(PIN_RING_INPUT, INPUT_PULLUP);
   pinMode(PIN_DOOR_OUTPUT, OUTPUT);
-  pinMode(PIN_MELODY, OUTPUT);
   digitalWrite(PIN_DOOR_OUTPUT, LOW);
-  digitalWrite(PIN_MELODY, LOW);
 
   {
     U8G2_SSD1306_128X64_NONAME_F_SW_I2C clearer(U8G2_R0, OLED_SCL, OLED_SDA,
