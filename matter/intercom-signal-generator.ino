@@ -1,14 +1,15 @@
 /**
  * Intercom Signal Generator (Bench Calibrator)
  *
- * Always-on: 800 Hz PWM with 100 Hz gap (9 ms ON, 1 ms OFF).
- * No button — starts on power-up.
+ * Always-on: 800 Hz PWM with 100 Hz gap (5 ms ON, 5 ms OFF).
+ * Gate timing runs on esp_timer so OLED refresh cannot skip pauses.
  *
  * See: matter/generator technical specification
  */
 
 #include <Arduino.h>
 #include <U8g2lib.h>
+#include <esp_timer.h>
 
 #define SIGNAL_OUTPUT_PIN 1
 
@@ -17,9 +18,9 @@
 
 const uint32_t CARRIER_HZ = 800;
 
-// 100 Hz gate: 10 ms period, 1 ms gap
+// 100 Hz: 10 ms period, 5 ms carrier + 5 ms pause
 const uint32_t MOD_PERIOD_US = 10000;
-const uint32_t GAP_US = 1000;
+const uint32_t GAP_US = 5000;
 const uint32_t CARRIER_ON_US = MOD_PERIOD_US - GAP_US;
 
 U8G2_SSD1306_72X40_ER_F_SW_I2C u8g2(U8G2_R0, /* clock=*/OLED_SCL, /* data=*/OLED_SDA,
@@ -34,7 +35,8 @@ unsigned long last_update_time = 0;
 const unsigned long FPS_DELAY = 33;
 int wave_offset = 0;
 
-bool gateOpen = false;
+volatile bool gateOpen = false;
+esp_timer_handle_t gateTimer = nullptr;
 
 bool isGateOpenAtPhase(uint32_t phaseUs) { return phaseUs < CARRIER_ON_US; }
 
@@ -50,6 +52,32 @@ void applyGate(bool open) {
 #endif
 }
 
+void gateTimerCallback(void *arg) {
+  (void)arg;
+  uint32_t phase = (uint32_t)(esp_timer_get_time() % MOD_PERIOD_US);
+  bool open = isGateOpenAtPhase(phase);
+  if (open != gateOpen) {
+    gateOpen = open;
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+    ledcWrite(SIGNAL_OUTPUT_PIN, open ? 128 : 0);
+#else
+    ledcWrite(0, open ? 128 : 0);
+#endif
+  }
+}
+
+void startGateTimer() {
+  const esp_timer_create_args_t args = {
+      .callback = &gateTimerCallback,
+      .arg = nullptr,
+      .dispatch_method = ESP_TIMER_TASK,
+      .name = "gen_gate",
+      .skip_unhandled_events = true,
+  };
+  esp_timer_create(&args, &gateTimer);
+  esp_timer_start_periodic(gateTimer, 200);  // 200 µs — reliably catches 5 ms gap
+}
+
 void startGenerator() {
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
   ledcAttach(SIGNAL_OUTPUT_PIN, CARRIER_HZ, 8);
@@ -58,12 +86,8 @@ void startGenerator() {
   ledcAttachPin(SIGNAL_OUTPUT_PIN, 0);
 #endif
   gateOpen = false;
-  applyGate(isGateOpenAtPhase(micros() % MOD_PERIOD_US));
-}
-
-void updateSignalGate() {
-  uint32_t phase = micros() % MOD_PERIOD_US;
-  applyGate(isGateOpenAtPhase(phase));
+  applyGate(isGateOpenAtPhase((uint32_t)(esp_timer_get_time() % MOD_PERIOD_US)));
+  startGateTimer();
 }
 
 void drawModulatedWaveform() {
@@ -73,7 +97,7 @@ void drawModulatedWaveform() {
   const int car_amp = 4;
 
   const int env_period_px = 24;
-  const int gap_px = 2;
+  const int gap_px = 12;  // 50 % pause
 
   for (int x = 0; x < SCREEN_W - 2; x++) {
     int phase_x = (x + wave_offset) % env_period_px;
@@ -105,7 +129,7 @@ void drawDisplay() {
   u8g2.setCursor(X_OFFSET + 2, Y_OFFSET + 7);
   u8g2.print("800Hz");
   u8g2.setCursor(X_OFFSET + 34, Y_OFFSET + 7);
-  u8g2.print("-100");
+  u8g2.print("5ms");
 
   u8g2.drawHLine(X_OFFSET, Y_OFFSET + 10, SCREEN_W);
   drawModulatedWaveform();
@@ -131,12 +155,10 @@ void setup() {
   startGenerator();
   drawDisplay();
 
-  Serial.println(F("Generator: 800 Hz, 100 Hz gap — always ON"));
+  Serial.println(F("Generator: 800 Hz, 5 ms pause @ 100 Hz — always ON"));
 }
 
 void loop() {
-  updateSignalGate();
-
   unsigned long now = millis();
   if (now - last_update_time >= FPS_DELAY) {
     last_update_time = now;
