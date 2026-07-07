@@ -23,10 +23,10 @@ ESP32-C3 firmware for the Smart Intercom project: bench signal generator, Matter
 |-----------|------|-------|
 | OLED SDA | 5 | Software I2C (adapter/generator) or HW I2C (PoC) |
 | OLED SCL | 6 | |
-| Blue LED | 8 | Active LOW |
+| Blue LED | 8 | Active LOW; 3 blinks on valid ring, solid ON on door pulse |
 | BOOT button | 9 | PoC only |
 | Ring input (adapter) | 4 | PC817, active LOW |
-| Door output (adapter) | 2 | PhotoMOS TLP172A |
+| Door output (adapter) | 2 | PhotoMOS TLP172A (HIGH 2 s; bench OK without load) |
 | Signal PWM (generator) | 1 | IRLB8743 MOSFET gate |
 | Freq button (generator) | 3 | |
 
@@ -45,6 +45,9 @@ Ring (CA) → PC817 → GPIO4 → duration filter (1–3 s)
 - **Always-on** Wi-Fi + external PSU
 - **No RTC / DS3231** — scheduling in Smart Life app
 - **OLED states:** READY, RING, EVENT SENT, DOOR OPEN, PAIRING, NO WiFi
+- **Blue LED:** 3 blinks on valid ring, solid ON during 2 s door pulse
+- **Wi-Fi:** Matter commissioning only (Smart Life QR)
+- **Bench → production:** full cycle test (generator + Matter + Tuya automations) in one pass
 
 ## Required Libraries (Arduino IDE)
 
@@ -56,4 +59,8 @@ Ring (CA) → PC817 → GPIO4 → duration filter (1–3 s)
 1. Board: **ESP32C3 Dev Module**
 2. Disconnect adapter from intercom wiring before USB flash
 3. Commission adapter in **Smart Life** (Matter pairing via QR in Serial monitor)
-4. Create automation: *When ring sensor opens → turn door switch ON*
+4. Rename endpoints: **Intercom Ring**, **Intercom Door**
+5. Create automations:
+   - Auto-open: ring → door ON, time 16:00–20:00
+   - Notify: ring outside 16:00–20:00 → *Someone's at the door!*
+   - Manual: tap Intercom Door anytime

@@ -17,7 +17,8 @@
 
 // --- GPIO (ESP32-C3 0.42" OLED board) ---
 #define PIN_RING_INPUT 4   // PC817 output, active LOW (INPUT_PULLUP)
-#define PIN_DOOR_OUTPUT 2  // PhotoMOS TLP172A (GPIO5 = OLED SDA)
+#define PIN_DOOR_OUTPUT 2  // PhotoMOS TLP172A (or bench load); HIGH = active
+#define PIN_STATUS_LED 8   // Onboard blue LED, active LOW
 
 #define OLED_SDA 5
 #define OLED_SCL 6
@@ -28,6 +29,10 @@ const uint32_t MAX_RING_MS = 3000;
 
 // --- Door latch pulse ---
 const uint32_t DOOR_PULSE_MS = 2000;
+
+// --- Status LED (blink on valid ring, solid on door open) ---
+const uint32_t LED_BLINK_INTERVAL_MS = 150;
+const uint8_t RING_BLINK_COUNT = 3;
 
 // --- Display ---
 U8G2_SSD1306_72X40_ER_F_SW_I2C u8g2(U8G2_R0, OLED_SCL, OLED_SDA, U8X8_PIN_NONE);
@@ -48,6 +53,11 @@ bool ringActive = false;
 
 unsigned long doorOnMs = 0;
 bool doorActive = false;
+
+bool ledBlinkActive = false;
+uint8_t ledBlinksLeft = 0;
+bool ledBlinkOn = false;
+unsigned long ledBlinkMs = 0;
 
 unsigned long lastDisplayUpdate = 0;
 const unsigned long DISPLAY_INTERVAL_MS = 200;
@@ -109,6 +119,44 @@ void updateDisplay() {
   u8g2.sendBuffer();
 }
 
+void startRingBlink() {
+  if (doorActive) {
+    return;
+  }
+  ledBlinkActive = true;
+  ledBlinksLeft = RING_BLINK_COUNT;
+  ledBlinkOn = true;
+  ledBlinkMs = millis();
+  digitalWrite(PIN_STATUS_LED, LOW);
+}
+
+void updateStatusLed() {
+  if (doorActive) {
+    digitalWrite(PIN_STATUS_LED, LOW);
+    return;
+  }
+
+  if (!ledBlinkActive) {
+    digitalWrite(PIN_STATUS_LED, HIGH);
+    return;
+  }
+
+  if (millis() - ledBlinkMs < LED_BLINK_INTERVAL_MS) {
+    return;
+  }
+
+  ledBlinkMs = millis();
+  ledBlinkOn = !ledBlinkOn;
+  digitalWrite(PIN_STATUS_LED, ledBlinkOn ? LOW : HIGH);
+
+  if (!ledBlinkOn) {
+    ledBlinksLeft--;
+    if (ledBlinksLeft == 0) {
+      ledBlinkActive = false;
+    }
+  }
+}
+
 void reportRingEvent() {
   ringSensor.setContact(true);
   ringSensor.updateAccessory();
@@ -116,6 +164,7 @@ void reportRingEvent() {
   ringSensor.setContact(false);
   ringSensor.updateAccessory();
 
+  startRingBlink();
   uiState = UI_SENT;
   uiSentUntil = millis() + 2000;
   Serial.println("[RING] Valid call reported to Matter");
@@ -123,16 +172,19 @@ void reportRingEvent() {
 
 bool onDoorChange(bool state) {
   if (state) {
+    ledBlinkActive = false;
     digitalWrite(PIN_DOOR_OUTPUT, HIGH);
     doorActive = true;
     doorOnMs = millis();
     uiState = UI_DOOR_OPEN;
-    Serial.println("[DOOR] PhotoMOS ON");
+    digitalWrite(PIN_STATUS_LED, LOW);
+    Serial.println("[DOOR] GPIO2 HIGH (2 s pulse)");
   } else {
     digitalWrite(PIN_DOOR_OUTPUT, LOW);
     doorActive = false;
     uiState = UI_READY;
-    Serial.println("[DOOR] PhotoMOS OFF");
+    digitalWrite(PIN_STATUS_LED, HIGH);
+    Serial.println("[DOOR] GPIO2 LOW");
   }
   updateDisplay();
   return true;
@@ -169,6 +221,7 @@ void updateDoorPulse() {
     doorActive = false;
     doorSwitch.setOnOff(false);
     uiState = UI_READY;
+    digitalWrite(PIN_STATUS_LED, HIGH);
     Serial.println("[DOOR] Pulse complete");
   }
 }
@@ -193,6 +246,9 @@ void setup() {
   pinMode(PIN_RING_INPUT, INPUT_PULLUP);
   pinMode(PIN_DOOR_OUTPUT, OUTPUT);
   digitalWrite(PIN_DOOR_OUTPUT, LOW);
+
+  pinMode(PIN_STATUS_LED, OUTPUT);
+  digitalWrite(PIN_STATUS_LED, HIGH);
 
   {
     U8G2_SSD1306_128X64_NONAME_F_SW_I2C clearer(U8G2_R0, OLED_SCL, OLED_SDA,
@@ -236,6 +292,7 @@ void loop() {
 
   processRingInput();
   updateDoorPulse();
+  updateStatusLed();
   updateUiTimeouts();
 
   if (millis() - lastDisplayUpdate >= DISPLAY_INTERVAL_MS) {

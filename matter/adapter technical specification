@@ -102,7 +102,7 @@ PhotoMOS is wired **in parallel** with the handset "Open" button contacts. When 
 
 > **Pin note:** GPIO5/GPIO6 are reserved for the onboard 0.42" OLED (I2C). PhotoMOS uses **GPIO2**.
 
-Door pulse: **2 s** active, then forced OFF in firmware.
+Door pulse: **2 s** active HIGH on GPIO2, then forced OFF in firmware. Until PhotoMOS is installed, GPIO2 can drive a bench load or scope — logic is identical.
 
 ### 2.4. OLED 0.42" Display (Onboard, SSD1306 72×40)
 
@@ -131,7 +131,7 @@ Future experiments (SPDT toggle, NC relay bypass): branch **`matter-custom-audio
 | 2 | PhotoMOS door latch (OUTPUT, 2 s pulse) |
 | 5 | OLED SDA |
 | 6 | OLED SCL |
-| 8 | Onboard blue LED (active LOW, optional) |
+| 8 | Onboard blue LED (active LOW): 3 blinks on valid ring, solid ON during door pulse |
 | 9 | BOOT button (not used in adapter firmware) |
 
 **Not used in v1:** GPIO18 (melody), DS3231 RTC.
@@ -153,25 +153,43 @@ The adapter is **always-on** (external PSU + permanent Wi-Fi). ESP is always con
 
 ### 4.2. Tuya Automations
 
-**Auto-open (working hours only):**
+After Matter pairing in Smart Life, rename the two endpoints:
+
+| Endpoint | Suggested name |
+|----------|----------------|
+| Contact Sensor | **Intercom Ring** |
+| OnOff Switch | **Intercom Door** |
+
+**Auto-open (16:00 – 20:00 only):**
 
 ```
-WHEN  Intercom Ring sensor → Open
+WHEN  Intercom Ring → Open
 IF    Time 16:00 – 20:00          ← schedule: auto-open ONLY
-THEN  Intercom Door switch → ON
-      (optional) Phone notification
+THEN  Intercom Door → ON
 ```
 
 **Manual open from app (always):**
 
 ```
-WHEN  Tap "Open door" in Smart Life   ← no time condition
-THEN  Intercom Door switch → ON
+WHEN  Tap "Intercom Door" in Smart Life   ← no time condition
+THEN  Intercom Door → ON
 ```
 
-**Outside working hours:** ring sounds normally (factory buzzer), physical button works, app open works, **auto-open does not run**.
+**Visitor notification (outside auto-open hours):**
+
+```
+WHEN  Intercom Ring → Open
+IF    Time is NOT 16:00 – 20:00
+THEN  Send notification: "Someone's at the door!"
+```
+
+**Outside working hours:** ring sounds normally (factory buzzer), physical button works, app open works, **auto-open does not run**, push notification still fires.
 
 All schedule logic lives in the Tuya app. No NTP, no RTC, no on-device clock.
+
+**Timing philosophy:** 1–3 s ring filter and 2 s door pulse are coarse guards against noise and stuck buttons — not precision timers. Usable behavior matters more than millisecond accuracy. Fine-tuning on the real CA line is optional; adjust only if field tests show missed or false rings.
+
+**Wi-Fi:** Matter commissioning only (Smart Life QR). No SmartConfig, no captive portal.
 
 ### 4.3. OLED Display States
 
@@ -181,7 +199,8 @@ All schedule logic lives in the Tuya app. No NTP, no RTC, no on-device clock.
 | Commissioning | `PAIRING...` / `Smart Life` |
 | Ring active | `>>> RING <<<` + duration timer |
 | Event sent | `EVENT SENT` → `Tuya` |
-| Door opening | `DOOR OPEN` + progress bar |
+| Door opening | `DOOR OPEN` + progress bar; blue LED solid ON |
+| Valid ring sent | Blue LED blinks 3× (150 ms on/off) |
 | No network | `NO WiFi` (ring & button still work) |
 
 ---
