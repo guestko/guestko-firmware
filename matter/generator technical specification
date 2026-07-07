@@ -13,19 +13,23 @@ To simulate a classic analog coordinate intercom call line (e.g., Urmet 1132), t
 | Parameter | Value |
 |-----------|-------|
 | Carrier | **800 Hz** square wave (fixed) |
-| Envelope | **100 Hz** — 5 ms carrier ON + **5 ms pause** per 10 ms period |
-| Power-up | Signal starts automatically (no button, no OFF mode) |
+| Rhythm | **250 ms note** + **120 ms pause** (~2.7 notes/s, audible gaps) |
+| Power-up | Signal starts automatically (no button) |
 | Target amplitude | ±4 V AC peak-to-peak (via AC coupling, see §1.2) |
 
-### 1.1. Modulation — Simple Gating (No Sine LUT)
+### 1.1. Note / Pause Envelope (Not Mains Hum)
+
+Fast 100 Hz gating sounds like **220 V mains buzz** — the ear cannot resolve separate pitches. For **distinct 800 Hz notes**, the gate must stay open long enough to hear the tone (~200+ ms), then a **100+ ms silence**:
 
 ```
-100 Hz period (10 ms):
-  0 – 5 ms:   carrier ON   (800 Hz PWM)
-  5 – 10 ms:  OFF          (pause)
+Cycle (370 ms):
+  0 – 250 ms:   800 Hz ON   (note)
+  250 – 370 ms: OFF         (pause)
 ```
 
-Gating runs on **`esp_timer`** (200 µs tick) so Software I2C OLED refresh cannot skip short pauses.
+Gating runs on **`esp_timer`** (1 ms tick), independent of OLED refresh.
+
+Tune `NOTE_US` / `PAUSE_US` in firmware if needed.
 
 ### 1.2. Single-Supply to Dual-Polar Conversion (AC Coupling)
 
@@ -109,9 +113,9 @@ See [`intercom-signal-generator.ino`](intercom-signal-generator.ino).
 
 | Feature | Description |
 |---------|-------------|
-| Output | 800 Hz + 5 ms pause @ 100 Hz, always on after boot |
-| Gate timing | `esp_timer` 200 µs (independent of OLED loop) |
-| OLED UI | `800Hz` / `5ms`, 50/50 envelope + carrier preview |
+| Output | 800 Hz notes (250 ms) + 120 ms pause, always on after boot |
+| Gate timing | `esp_timer` 1 ms |
+| OLED UI | `800Hz NOTE` / `250+120ms`, long bar + gap preview |
 
 ### Flashing
 

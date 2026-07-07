@@ -1,8 +1,11 @@
 /**
  * Intercom Signal Generator (Bench Calibrator)
  *
- * Always-on: 800 Hz PWM with 100 Hz gap (5 ms ON, 5 ms OFF).
- * Gate timing runs on esp_timer so OLED refresh cannot skip pauses.
+ * 800 Hz tone as distinct audible notes separated by short pauses
+ * (not fast 100 Hz gating — that sounds like mains hum).
+ *
+ * Pattern: 250 ms note → 120 ms silence → repeat.
+ * Gate timing on esp_timer (independent of OLED).
  *
  * See: matter/generator technical specification
  */
@@ -18,10 +21,10 @@
 
 const uint32_t CARRIER_HZ = 800;
 
-// 100 Hz: 10 ms period, 5 ms carrier + 5 ms pause
-const uint32_t MOD_PERIOD_US = 10000;
-const uint32_t GAP_US = 5000;
-const uint32_t CARRIER_ON_US = MOD_PERIOD_US - GAP_US;
+// Note / pause rhythm (audible as separate beeps, ~2.7 notes/s)
+const uint32_t NOTE_US = 250000;   // 250 ms — long enough to hear pitch
+const uint32_t PAUSE_US = 120000;  // 120 ms — clear gap between notes
+const uint32_t CYCLE_US = NOTE_US + PAUSE_US;
 
 U8G2_SSD1306_72X40_ER_F_SW_I2C u8g2(U8G2_R0, /* clock=*/OLED_SCL, /* data=*/OLED_SDA,
                                      /* reset=*/U8X8_PIN_NONE);
@@ -38,7 +41,7 @@ int wave_offset = 0;
 volatile bool gateOpen = false;
 esp_timer_handle_t gateTimer = nullptr;
 
-bool isGateOpenAtPhase(uint32_t phaseUs) { return phaseUs < CARRIER_ON_US; }
+bool isGateOpenAtPhase(uint32_t phaseUs) { return phaseUs < NOTE_US; }
 
 void applyGate(bool open) {
   if (open == gateOpen) {
@@ -54,7 +57,7 @@ void applyGate(bool open) {
 
 void gateTimerCallback(void *arg) {
   (void)arg;
-  uint32_t phase = (uint32_t)(esp_timer_get_time() % MOD_PERIOD_US);
+  uint32_t phase = (uint32_t)(esp_timer_get_time() % CYCLE_US);
   bool open = isGateOpenAtPhase(phase);
   if (open != gateOpen) {
     gateOpen = open;
@@ -75,7 +78,7 @@ void startGateTimer() {
       .skip_unhandled_events = true,
   };
   esp_timer_create(&args, &gateTimer);
-  esp_timer_start_periodic(gateTimer, 200);  // 200 µs — reliably catches 5 ms gap
+  esp_timer_start_periodic(gateTimer, 1000);  // 1 ms — enough for 120 ms pauses
 }
 
 void startGenerator() {
@@ -86,7 +89,7 @@ void startGenerator() {
   ledcAttachPin(SIGNAL_OUTPUT_PIN, 0);
 #endif
   gateOpen = false;
-  applyGate(isGateOpenAtPhase((uint32_t)(esp_timer_get_time() % MOD_PERIOD_US)));
+  applyGate(isGateOpenAtPhase((uint32_t)(esp_timer_get_time() % CYCLE_US)));
   startGateTimer();
 }
 
@@ -96,12 +99,13 @@ void drawModulatedWaveform() {
   const int car_y = Y_OFFSET + 32;
   const int car_amp = 4;
 
-  const int env_period_px = 24;
-  const int gap_px = 12;  // 50 % pause
+  // Scrolling: long note block + short gap (~250:120 ms)
+  const int env_period_px = 40;
+  const int note_px = 26;
 
   for (int x = 0; x < SCREEN_W - 2; x++) {
     int phase_x = (x + wave_offset) % env_period_px;
-    if (phase_x < env_period_px - gap_px) {
+    if (phase_x < note_px) {
       u8g2.drawVLine(X_OFFSET + 1 + x, env_y, env_h);
     }
   }
@@ -112,10 +116,10 @@ void drawModulatedWaveform() {
 
   for (int x = 0; x < SCREEN_W - 2; x++) {
     int phase_x = (x + wave_offset) % env_period_px;
-    if (phase_x >= env_period_px - gap_px) {
+    if (phase_x >= note_px) {
       continue;
     }
-    int car_phase = (x + wave_offset * 2) % car_period;
+    int car_phase = (x + wave_offset * 3) % car_period;
     int y = car_y + ((car_phase < half) ? -car_amp : car_amp);
     u8g2.drawPixel(X_OFFSET + 1 + x, y);
   }
@@ -129,9 +133,12 @@ void drawDisplay() {
   u8g2.setCursor(X_OFFSET + 2, Y_OFFSET + 7);
   u8g2.print("800Hz");
   u8g2.setCursor(X_OFFSET + 34, Y_OFFSET + 7);
-  u8g2.print("5ms");
+  u8g2.print("NOTE");
 
-  u8g2.drawHLine(X_OFFSET, Y_OFFSET + 10, SCREEN_W);
+  u8g2.setCursor(X_OFFSET + 2, Y_OFFSET + 17);
+  u8g2.print("250+120ms");
+
+  u8g2.drawHLine(X_OFFSET, Y_OFFSET + 19, SCREEN_W);
   drawModulatedWaveform();
 
   u8g2.sendBuffer();
@@ -155,7 +162,7 @@ void setup() {
   startGenerator();
   drawDisplay();
 
-  Serial.println(F("Generator: 800 Hz, 5 ms pause @ 100 Hz — always ON"));
+  Serial.println(F("Generator: 800 Hz notes 250 ms + 120 ms pause"));
 }
 
 void loop() {
