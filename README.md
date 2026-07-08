@@ -43,7 +43,7 @@ See [`matter/adapter technical specification`](matter/adapter%20technical%20spec
 ### Quick Wiring (Adapter)
 
 **Ring detector:**
-- CA → 1N4007 → 10 µF → PC817 IN+/IN−
+- CA → 1N4007 → 10 µF ceramic → PC817 IN+/IN−
 - PC817 OUT → GPIO4
 - Pin 6 (GND) → common ground
 

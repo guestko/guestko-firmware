@@ -61,7 +61,7 @@ Ring detection uses a **high-impedance parallel tap** on CA into a **PC817** opt
                                       |               |
                                       | +             |
                                       |-[Capacitor]   |----> IN+ (PC817 pin 1)
-  Handset Pin 6 (GND) <────────────────| (10 µF 25V)  |
+  Handset Pin 6 (GND) <────────────────| (10 µF ceramic) |
   (Common System Ground)               | -             |
                                       +--------------> IN− (PC817 pin 2)
 ```
@@ -78,7 +78,7 @@ Logic: active **LOW** during a call.
 
 **Filter components:**
 - **1N4007** — clips negative half-waves, protects optocoupler LED.
-- **10 µF 25 V** — smooths 50 Hz ripple into stable DC during ringing.
+- **10 µF ceramic (non-polarized, e.g. X7R ≥16 V)** — smooths 50 Hz ripple into stable DC during ringing. No polarity — either lead to IN+/GND side of the network.
 
 **Wiring rule:** Solder the tap onto CA **before** or **alongside** the existing factory connection. Never remove the factory CA trace to the buzzer.
 
