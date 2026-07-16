@@ -93,3 +93,12 @@ See wiring in the sections below (original v34 design).
 ## License
 
 Open Source DIY Project. Use at your own risk.
+
+---
+
+## 📡 ESP32-C3 Signal Generator (9 Vpp)
+
+Portable dual-frequency test signal generator (50 Hz + 850 Hz) for oscilloscope calibration.
+
+- **Firmware:** [`esp32-c3-signal-generator/esp32-c3-signal-generator.ino`](esp32-c3-signal-generator/esp32-c3-signal-generator.ino)
+- **Docs:** [`docs/esp32-signal-generator.md`](docs/esp32-signal-generator.md)
