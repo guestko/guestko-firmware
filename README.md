@@ -6,7 +6,6 @@ Upgrade a standard analog apartment intercom handset into an automated entry sys
 
 ```
 guestko-firmware/
-├── intercom-esp32-receiver.ino      # Legacy offline receiver (peak detector + relay)
 └── matter/
     ├── intercom-adapter.ino         # Production: Tuya/Matter adapter + OLED
     ├── matter-esp32.ino             # Matter PoC switch demo
@@ -20,7 +19,6 @@ guestko-firmware/
 |----------|----------|
 | **Production install in Urmet handset (Tuya Smart Life)** | `matter/intercom-adapter.ino` |
 | **Matter protocol experiments** | `matter/matter-esp32.ino` |
-| **Simple offline auto-open (no Wi-Fi)** | `intercom-esp32-receiver.ino` |
 
 ---
 
@@ -49,33 +47,6 @@ See [`matter/adapter technical specification`](matter/adapter%20technical%20spec
 - PhotoMOS OUT → Pin 9 ↔ Pin 6
 
 **Display:** onboard OLED on GPIO5 (SDA) / GPIO6 (SCL)
-
----
-
-## Legacy Offline Receiver
-
-Standalone auto-open without Wi-Fi. Uses peak detector on GPIO3 and relay on GPIO10.
-
-See wiring in the sections below (original v34 design).
-
-### Peak Detector Wiring
-
-⚠️ **Do not connect USB while wired to intercom.** Use isolated USB charger only.
-
-- Intercom CA → Diode Anode → Diode Cathode → **GPIO 3**
-- GPIO 3 → Capacitor (+) / Capacitor (−) → GND
-- GPIO 3 → Resistor 10 kΩ → GND
-- Intercom Pin 1 (Speaker) → GND
-
-### Relay
-
-- GPIO 10 → Relay IN
-- Pin 9 & 10 → Relay COM / NO
-
-### Logic
-
-- ADC threshold > 1000 (~0.8 V)
-- Valid ring: 0.5 – 5.0 s → relay pulse 500 ms
 
 ---
 
