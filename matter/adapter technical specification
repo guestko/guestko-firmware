@@ -113,7 +113,7 @@ Door pulse: **2 s** active HIGH on GPIO2, then forced OFF in firmware. Until Pho
 | SDA | **GPIO5** |
 | SCL | **GPIO6** |
 
-Use **Software I2C** (U8g2 SW_I2C driver) — see generator spec §4 for snow/offset fix.
+Use **Software I2C** (U8g2 SW_I2C driver). For 72×40 panels use constructor `U8G2_SSD1306_72X40_ER_F_SW_I2C` with correct SDA/SCL pins — avoid manual pixel offsets that cause snow.
 
 ### 2.5. Custom Ringback — Not in v1
 

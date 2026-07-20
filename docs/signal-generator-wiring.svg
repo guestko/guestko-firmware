@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 620" font-family="Arial, Helvetica, sans-serif">
+  <defs>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="1" dy="2" stdDeviation="2" flood-opacity="0.18"/>
+    </filter>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#2b6cb0"/>
+    </marker>
+  </defs>
+
+  <rect width="1000" height="620" fill="#f7f9fc"/>
+  <text x="500" y="32" text-anchor="middle" font-size="20" font-weight="700" fill="#1a2b44">
+    FY6300-60M &#8594; 1N4007 + 10 &#181;F (106) &#8594; PC817
+  </text>
+  <text x="500" y="54" text-anchor="middle" font-size="12" fill="#5a6a7a">
+    Bench-test &#183; verified: ~2.65 V DC, ripple ~0.3 Vpp
+  </text>
+
+  <!-- FY6300 -->
+  <g filter="url(#shadow)">
+    <rect x="30" y="90" width="220" height="250" rx="10" fill="#2d3748" stroke="#1a202c" stroke-width="2"/>
+    <text x="140" y="120" text-anchor="middle" fill="#fff" font-size="15" font-weight="700">FY6300-60M</text>
+    <rect x="50" y="140" width="180" height="24" rx="4" fill="#e53e3e"/>
+    <text x="140" y="156" text-anchor="middle" fill="#fff" font-size="10" font-weight="700">CH1: Sine 50 Hz, 8 V, OFFS 0</text>
+    <rect x="50" y="172" width="180" height="24" rx="4" fill="#c05621"/>
+    <text x="140" y="188" text-anchor="middle" fill="#fff" font-size="10" font-weight="700">AM: internal 850 Hz</text>
+    <rect x="50" y="210" width="80" height="24" rx="4" fill="#2b6cb0"/>
+    <text x="90" y="226" text-anchor="middle" fill="#fff" font-size="10">SIG</text>
+    <rect x="150" y="210" width="80" height="24" rx="4" fill="#1a365d"/>
+    <text x="190" y="226" text-anchor="middle" fill="#fff" font-size="10">GND</text>
+    <text x="140" y="290" text-anchor="middle" fill="#a0aec0" font-size="10">No ESP / no PC</text>
+  </g>
+
+  <line x1="250" y1="222" x2="300" y2="222" stroke="#e53e3e" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <!-- Input module -->
+  <g filter="url(#shadow)">
+    <rect x="300" y="130" width="320" height="280" rx="10" fill="#fff7ed" stroke="#dd6b20" stroke-width="2"/>
+    <text x="460" y="158" text-anchor="middle" font-size="13" font-weight="700" fill="#9c4221">E>4 PC817 (verified)</text>
+
+    <polygon points="340,222 340,242 355,232" fill="#744210"/>
+    <line x1="355" y1="232" x2="400" y2="232" stroke="#744210" stroke-width="2"/>
+    <text x="365" y="215" font-size="11" fill="#744210" font-weight="700">D1 1N4007</text>
+
+    <circle cx="430" cy="232" r="12" fill="none" stroke="#e53e3e" stroke-width="2"/>
+    <line x1="424" y1="226" x2="436" y2="238" stroke="#e53e3e" stroke-width="2"/>
+    <line x1="424" y1="238" x2="436" y2="226" stroke="#e53e3e" stroke-width="2"/>
+    <text x="460" y="237" font-size="10" fill="#e53e3e">pin 1 IN+</text>
+
+    <line x1="430" y1="270" x2="430" y2="285" stroke="#2b6cb0" stroke-width="2"/>
+    <line x1="415" y1="285" x2="445" y2="285" stroke="#2b6cb0" stroke-width="3"/>
+    <line x1="415" y1="293" x2="445" y2="293" stroke="#2b6cb0" stroke-width="3"/>
+    <line x1="430" y1="293" x2="430" y2="310" stroke="#2b6cb0" stroke-width="2"/>
+    <text x="470" y="295" font-size="11" fill="#2b6cb0" font-weight="700">C1 10 &#181;F (106)</text>
+
+    <line x1="430" y1="310" x2="430" y2="370" stroke="#2b6cb0" stroke-width="1.5"/>
+    <line x1="300" y1="370" x2="620" y2="370" stroke="#2b6cb0" stroke-width="2"/>
+    <text x="460" y="390" text-anchor="middle" font-size="11" fill="#2b6cb0">GND (common with FY6300)</text>
+
+    <text x="460" y="420" text-anchor="middle" font-size="11" fill="#553c9a" font-weight="700">DMM DC on pin 1:</text>
+    <text x="460" y="438" text-anchor="middle" font-size="10" fill="#553c9a">ON 2.5&#8211;2.8 V &#183; OFF &lt; 0.3 V</text>
+  </g>
+
+  <!-- PC817 -->
+  <g filter="url(#shadow)">
+    <rect x="660" y="160" width="110" height="160" rx="8" fill="#1a202c" stroke="#4a5568" stroke-width="2"/>
+    <text x="715" y="188" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">PC817</text>
+    <text x="715" y="206" text-anchor="middle" fill="#a0aec0" font-size="9">1,2 = LED</text>
+    <text x="715" y="220" text-anchor="middle" fill="#a0aec0" font-size="9">3 = C, 4 = E</text>
+    <circle cx="680" cy="250" r="4" fill="#e53e3e"/>
+    <circle cx="680" cy="265" r="4" fill="#e53e3e"/>
+    <circle cx="750" cy="250" r="4" fill="#38a169"/>
+    <circle cx="750" cy="265" r="4" fill="#38a169"/>
+    <text x="715" y="300" text-anchor="middle" fill="#cbd5e0" font-size="9">pin 2 &#8594; GND</text>
+  </g>
+
+  <line x1="620" y1="232" x2="660" y2="250" stroke="#e53e3e" stroke-width="2"/>
+
+  <!-- Measurement box -->
+  <g filter="url(#shadow)">
+    <rect x="660" y="360" width="300" height="90" rx="8" fill="#faf5ff" stroke="#805ad5" stroke-width="2"/>
+    <text x="810" y="388" text-anchor="middle" font-size="12" font-weight="700" fill="#553c9a">Ripple ~0.3 Vpp &#8212; OK</text>
+    <text x="810" y="408" text-anchor="middle" font-size="10" fill="#6b46c1">Scope: pin 1, DC coupling</text>
+    <text x="810" y="426" text-anchor="middle" font-size="10" fill="#6b46c1">Multimeter = DC voltage mode</text>
+  </g>
+
+  <!-- Waveform -->
+  <rect x="30" y="380" width="220" height="100" rx="6" fill="#fff" stroke="#cbd5e0"/>
+  <text x="140" y="402" text-anchor="middle" font-size="10" font-weight="700" fill="#4a5568">SIG (scope AC)</text>
+  <path d="M45 440 Q65 420 85 440 T125 440 T165 440 T205 440" fill="none" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="140" y="465" text-anchor="middle" font-size="9" fill="#718096">50 Hz + 850 Hz AM, 8 Vpp</text>
+</svg>
