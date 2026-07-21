@@ -14,6 +14,7 @@
 #include <Matter.h>
 #include <U8g2lib.h>
 #include <WiFi.h>
+#include <Wire.h>
 
 // --- GPIO (ESP32-C3 0.42" OLED board) ---
 #define PIN_RING_INPUT 4   // PC817 output, active LOW (INPUT_PULLUP)
@@ -40,8 +41,8 @@ const uint32_t DECOMMISSION_MS = 5000;
 unsigned long bootPressMs = 0;
 bool bootPressed = false;
 
-// --- Display ---
-U8G2_SSD1306_72X40_ER_F_SW_I2C u8g2(U8G2_R0, OLED_SCL, OLED_SDA, U8X8_PIN_NONE);
+// --- Display (SSD1306 72x40, hardware I2C — same as matter-esp32.ino) ---
+U8G2_SSD1306_72X40_ER_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
 enum UiState {
   UI_READY,
@@ -59,6 +60,9 @@ bool ringActive = false;
 
 unsigned long doorOnMs = 0;
 bool doorActive = false;
+bool doorUiDirty = false;
+bool ringReportPending = false;
+unsigned long ringReportMs = 0;
 
 bool ledBlinkActive = false;
 uint8_t ledBlinksLeft = 0;
@@ -67,6 +71,11 @@ unsigned long ledBlinkMs = 0;
 
 unsigned long lastDisplayUpdate = 0;
 const unsigned long DISPLAY_INTERVAL_MS = 200;
+
+unsigned long lastWifiDebugMs = 0;
+const unsigned long WIFI_DEBUG_INTERVAL_MS = 10000;
+wl_status_t lastWifiStatus = WL_NO_SHIELD;
+int lastWifiDisconnectReason = -1;
 
 // --- Matter endpoints ---
 MatterContactSensor ringSensor;
@@ -85,7 +94,7 @@ void updateDisplay() {
 
   case UI_NO_WIFI:
     u8g2.drawStr(0, 12, "NO WiFi");
-    u8g2.drawStr(0, 25, "Check router");
+    u8g2.drawStr(0, 25, "BOOT 5s=reset");
     break;
 
   case UI_RINGING: {
@@ -164,18 +173,39 @@ void updateStatusLed() {
 }
 
 void reportRingEvent() {
-  // Contact sensor: true = closed, false = open (triggers Tuya automation)
-  ringSensor.setContact(false);
-  delay(100);
+  if (Matter.isDeviceCommissioned()) {
+    ringSensor.setContact(false);
+    ringReportPending = true;
+    ringReportMs = millis();
+    Serial.println("[RING] Valid call — reporting to Matter");
+  } else {
+    Serial.println("[RING] Valid call (local only — not paired yet)");
+    startRingBlink();
+    uiState = UI_SENT;
+    uiSentUntil = millis() + 2000;
+    doorUiDirty = true;
+  }
+}
+
+void updateRingReport() {
+  if (!ringReportPending) {
+    return;
+  }
+  if (millis() - ringReportMs < 100) {
+    return;
+  }
   ringSensor.setContact(true);
+  ringReportPending = false;
+  Serial.println("[RING] Matter contact restored");
 
   startRingBlink();
   uiState = UI_SENT;
   uiSentUntil = millis() + 2000;
-  Serial.println("[RING] Valid call reported to Matter");
+  doorUiDirty = true;
 }
 
 bool onDoorChange(bool state) {
+  // Called from Matter task — no I2C/Serial/display here.
   if (state) {
     ledBlinkActive = false;
     digitalWrite(PIN_DOOR_OUTPUT, HIGH);
@@ -183,16 +213,28 @@ bool onDoorChange(bool state) {
     doorOnMs = millis();
     uiState = UI_DOOR_OPEN;
     digitalWrite(PIN_STATUS_LED, LOW);
-    Serial.println("[DOOR] GPIO2 HIGH (2 s pulse)");
   } else {
     digitalWrite(PIN_DOOR_OUTPUT, LOW);
     doorActive = false;
     uiState = UI_READY;
     digitalWrite(PIN_STATUS_LED, HIGH);
-    Serial.println("[DOOR] GPIO2 LOW");
   }
-  updateDisplay();
+  doorUiDirty = true;
   return true;
+}
+
+void finishDoorPulse() {
+  digitalWrite(PIN_DOOR_OUTPUT, LOW);
+  doorActive = false;
+  uiState = UI_READY;
+  digitalWrite(PIN_STATUS_LED, HIGH);
+  doorUiDirty = true;
+
+  if (doorSwitch.setOnOff(false)) {
+    Serial.println("[DOOR] Pulse complete — Matter synced OFF");
+  } else {
+    Serial.println("[DOOR] Pulse complete — Matter sync OFF failed");
+  }
 }
 
 void processRingInput() {
@@ -222,12 +264,7 @@ void processRingInput() {
 
 void updateDoorPulse() {
   if (doorActive && (millis() - doorOnMs >= DOOR_PULSE_MS)) {
-    digitalWrite(PIN_DOOR_OUTPUT, LOW);
-    doorActive = false;
-    doorSwitch.setOnOff(false);
-    uiState = UI_READY;
-    digitalWrite(PIN_STATUS_LED, HIGH);
-    Serial.println("[DOOR] Pulse complete");
+    finishDoorPulse();
   }
 }
 
@@ -262,6 +299,90 @@ void updateUiTimeouts() {
   }
 }
 
+const char *wifiStatusName(wl_status_t status) {
+  switch (status) {
+  case WL_NO_SHIELD: return "NO_SHIELD";
+  case WL_IDLE_STATUS: return "IDLE";
+  case WL_NO_SSID_AVAIL: return "NO_SSID_AVAIL";
+  case WL_SCAN_COMPLETED: return "SCAN_COMPLETED";
+  case WL_CONNECTED: return "CONNECTED";
+  case WL_CONNECT_FAILED: return "CONNECT_FAILED";
+  case WL_CONNECTION_LOST: return "CONNECTION_LOST";
+  case WL_DISCONNECTED: return "DISCONNECTED";
+  default: return "UNKNOWN";
+  }
+}
+
+const char *wifiEventName(WiFiEvent_t event) {
+  switch (event) {
+  case ARDUINO_EVENT_WIFI_READY: return "WIFI_READY";
+  case ARDUINO_EVENT_WIFI_STA_START: return "STA_START";
+  case ARDUINO_EVENT_WIFI_STA_STOP: return "STA_STOP";
+  case ARDUINO_EVENT_WIFI_STA_CONNECTED: return "STA_CONNECTED";
+  case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: return "STA_DISCONNECTED";
+  case ARDUINO_EVENT_WIFI_STA_AUTHMODE_CHANGE: return "AUTHMODE_CHANGE";
+  case ARDUINO_EVENT_WIFI_STA_GOT_IP: return "GOT_IP";
+  case ARDUINO_EVENT_WIFI_STA_LOST_IP: return "LOST_IP";
+  default: return "OTHER";
+  }
+}
+
+void onWifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
+  Serial.printf("[WIFI EVT] %s (%d)\n", wifiEventName(event), event);
+
+  if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+    lastWifiDisconnectReason = info.wifi_sta_disconnected.reason;
+    Serial.printf("[WIFI EVT] disconnect reason=%d\n", lastWifiDisconnectReason);
+  }
+}
+
+void printWifiDiagnostics(const char *tag) {
+  wl_status_t status = WiFi.status();
+
+  Serial.println();
+  Serial.printf("=== WiFi debug [%s] ===\n", tag);
+  Serial.printf("Matter commissioned: %s\n",
+                Matter.isDeviceCommissioned() ? "YES" : "NO");
+  Serial.printf("WiFi status: %s (%d)\n", wifiStatusName(status), status);
+  Serial.printf("WiFi mode: %d\n", WiFi.getMode());
+
+  if (status == WL_CONNECTED) {
+    Serial.printf("SSID: %s\n", WiFi.SSID().c_str());
+    Serial.printf("IP: %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("Gateway: %s\n", WiFi.gatewayIP().toString().c_str());
+    Serial.printf("RSSI: %d dBm\n", WiFi.RSSI());
+    Serial.printf("Channel: %d\n", WiFi.channel());
+  } else {
+    Serial.println("SSID: (not connected)");
+    if (lastWifiDisconnectReason >= 0) {
+      Serial.printf("Last disconnect reason: %d\n", lastWifiDisconnectReason);
+    }
+  }
+
+  Serial.printf("GPIO4 ring input: %s\n",
+                digitalRead(PIN_RING_INPUT) == LOW ? "LOW (active)" : "HIGH (idle)");
+  Serial.printf("Free heap: %u bytes\n", ESP.getFreeHeap());
+  Serial.println("========================");
+  Serial.println();
+}
+
+void updateWifiDebug() {
+  wl_status_t status = WiFi.status();
+
+  if (status != lastWifiStatus) {
+    Serial.printf("[WIFI] status change: %s -> %s\n",
+                  wifiStatusName(lastWifiStatus), wifiStatusName(status));
+    lastWifiStatus = status;
+    printWifiDiagnostics("status-change");
+  }
+
+  unsigned long now = millis();
+  if (now - lastWifiDebugMs >= WIFI_DEBUG_INTERVAL_MS) {
+    lastWifiDebugMs = now;
+    printWifiDiagnostics("periodic");
+  }
+}
+
 void printCommissioningInfo() {
   Serial.println();
   Serial.println("=== Matter commissioning ===");
@@ -275,6 +396,13 @@ void printCommissioningInfo() {
 
 void setup() {
   Serial.begin(115200);
+  delay(500);
+  Serial.println();
+  Serial.println(">>> Intercom Adapter (WiFi debug build) <<<");
+
+  WiFi.onEvent(onWifiEvent);
+  WiFi.setAutoReconnect(true);
+  lastWifiStatus = WiFi.status();
 
   pinMode(PIN_RING_INPUT, INPUT_PULLUP);
   pinMode(PIN_DOOR_OUTPUT, OUTPUT);
@@ -285,17 +413,12 @@ void setup() {
 
   pinMode(PIN_BOOT_BUTTON, INPUT_PULLUP);
 
-  {
-    U8G2_SSD1306_128X64_NONAME_F_SW_I2C clearer(U8G2_R0, OLED_SCL, OLED_SDA,
-                                                  U8X8_PIN_NONE);
-    clearer.begin();
-    clearer.clearBuffer();
-    clearer.sendBuffer();
-  }
-
+  Wire.begin(OLED_SDA, OLED_SCL);
   u8g2.begin();
   u8g2.setContrast(255);
+  u8g2.setPowerSave(0);
   updateDisplay();
+  Serial.println("[OLED] init OK (72x40 HW I2C, SDA=5 SCL=6)");
 
   ringSensor.begin(true);  // idle = closed (no ring)
   doorSwitch.begin(false);
@@ -304,41 +427,53 @@ void setup() {
   Matter.begin();
 
   if (Matter.isDeviceCommissioned()) {
-    doorSwitch.updateAccessory();
+    // Reset stale ON state saved in Matter NVS (pulse ends with OFF sync).
+    digitalWrite(PIN_DOOR_OUTPUT, LOW);
+    doorActive = false;
+    doorSwitch.setOnOff(false);
+    uiState = UI_READY;
+    doorUiDirty = true;
     Serial.println("Matter commissioned — ready.");
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("[WIFI] commissioned but not connected — hold BOOT 5s to reset pairing");
+    }
   } else {
     uiState = UI_PAIRING;
     updateDisplay();
     printCommissioningInfo();
   }
+
+  printWifiDiagnostics("boot");
 }
 
 void loop() {
+  processRingInput();
+  updateRingReport();
+  updateDoorPulse();
+  updateStatusLed();
+  updateUiTimeouts();
+  checkDecommissionButton();
+  updateWifiDebug();
+
+  if (doorUiDirty || millis() - lastDisplayUpdate >= DISPLAY_INTERVAL_MS) {
+    lastDisplayUpdate = millis();
+    doorUiDirty = false;
+    updateDisplay();
+  }
+
   if (!Matter.isDeviceCommissioned()) {
-    uiState = UI_PAIRING;
+    if (ringActive) {
+      uiState = UI_RINGING;
+    } else if (uiState != UI_SENT && uiState != UI_DOOR_OPEN) {
+      uiState = UI_PAIRING;
+    }
     static unsigned long lastQrPrint = 0;
     if (lastQrPrint == 0 || millis() - lastQrPrint >= 30000) {
       printCommissioningInfo();
       lastQrPrint = millis();
     }
-    if (millis() - lastDisplayUpdate >= DISPLAY_INTERVAL_MS) {
-      lastDisplayUpdate = millis();
-      updateDisplay();
-    }
     delay(100);
-    checkDecommissionButton();
     return;
-  }
-
-  processRingInput();
-  updateDoorPulse();
-  updateStatusLed();
-  updateUiTimeouts();
-  checkDecommissionButton();
-
-  if (millis() - lastDisplayUpdate >= DISPLAY_INTERVAL_MS) {
-    lastDisplayUpdate = millis();
-    updateDisplay();
   }
 
   delay(10);
