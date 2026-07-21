@@ -60,7 +60,48 @@ CH2 может быть **OFF** — для AM используется внут�
 
 ## Часть 1b. Точная копия с ПК (Arbitrary waveform)
 
-### ПО FeelTech для FY6300
+### Вариант A — скрипт fygen (Mac/Linux, рекомендуется)
+
+Скрипт [`scripts/fy6300_play_call_tone.py`](../scripts/fy6300_play_call_tone.py) **сам генерирует** ARB (без CSV в репозитории) и загружает его в **arb1** на FY6300.
+
+Один раз — установка окружения:
+
+```bash
+cd guestko-firmware
+python3 -m venv .venv-fygen
+.venv-fygen/bin/pip install -r scripts/requirements-fygen.txt
+git clone https://github.com/mattwach/fygen.git ~/WebstormProjects/fygen
+```
+
+**Подключите FY6300 по USB** (нужен драйвер CH340/CH341, если порт не появляется — см. ссылки ниже).
+
+```bash
+ls /dev/cu.*   # найти /dev/cu.wchusbserial* или /dev/cu.usbserial*
+
+.venv-fygen/bin/python3 scripts/fy6300_play_call_tone.py \
+  --profile e3 \
+  --port /dev/cu.wchusbserialXXXX \
+  --debug
+```
+
+Профили (bitonal sweep, см. PDF Urmet):
+
+| `--profile` | F1 / F2 (Hz) | Sweep (Hz) | Vpp |
+|-------------|--------------|------------|-----|
+| `a` | 500 / 800 | 11 | 8 |
+| `e` | 500 / 820 | 12 | 8 |
+| **`e3`** (default) | 500 / 850 | 11 | 8 |
+| `v2` | 753 / 841 | 12 | 8 |
+
+Скрипт включает **CH1: arb1**, playback = sweep Hz, **8 Vpp**, offset **0**, **OUT ON**.
+
+Проверка без прибора:
+
+```bash
+.venv-fygen/bin/python3 scripts/fy6300_play_call_tone.py --profile e3 --dry-run
+```
+
+### Вариант B — GUI FeelTech (Windows / официальное ПО)
 
 | Источник | Ссылка |
 |----------|--------|
@@ -73,40 +114,26 @@ CH2 может быть **OFF** — для AM используется внут�
 
 > Если `feeltech.net` недоступен — используйте Yandex-зеркало или диск из комплекта прибора.
 
-### Готовый CSV в репозитории
+Сгенерировать CSV локально (опционально): запустите скрипт с `--dry-run`, затем экспортируйте столбец амплитуд из своего генератора или используйте **Вариант A** выше.
 
-Файл: [`scripts/urmet_50_850.csv`](../scripts/urmet_50_850.csv)
-
-| Параметр | Значение |
-|----------|----------|
-| Формула | **0.7 × sin(50 Hz) + 0.3 × sin(850 Hz)** |
-| Точек | **1999** (в пределе 8192 FY6300) |
-| Период | **20 ms** (1/50 Hz) |
-| Амплитуда | нормализована **−1 … +1** |
-| Частота дискретизации | **100 kHz** (при воспроизведении на 50 Hz) |
-
-Пересоздать файл:
-
-```bash
-python3 scripts/generate_urmet_waveform.py
-```
-
-### Загрузка в FY6300
+### Загрузка ARB через GUI FeelTech
 
 1. USB → ПК, запустить ПО FeelTech.
 2. **CH1** → тип волны **Arbitrary / User / ARB**.
-3. **Import / Load** → выбрать `scripts/urmet_50_850.csv` (один столбец амплитуд).
+3. **Import / Load** → свой CSV (один столбец амплитуд **−1 … +1**).
 4. Если CSV не принимается — вставить столбец в текстовое окно редактора ARB или импортировать как `.txt`.
 5. Настройки выхода:
 
 | Параметр | Значение |
 |----------|----------|
-| Frequency | **50 Hz** (один загруженный период = 20 ms) |
+| Frequency | **sweep Hz** профиля (напр. **11 Hz** для `e3`) |
 | Amplitude | **8 Vpp** |
 | Offset | **0 V** |
 | AM | **OFF** |
 
 6. **Output ON** → проверка на осциллографе (AC, 10 ms/div).
+
+> Для быстрого AM-теста «50 Hz + 850 Hz» без ARB достаточно **Части 1** (Sine + AM 850 Hz). Для сравнения с реальным Urmet используйте **профиль `e3`** через скрипт.
 
 ---
 
